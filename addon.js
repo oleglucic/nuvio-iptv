@@ -9,8 +9,8 @@ app.use(express.json()); app.use(express.urlencoded({ extended: true }));
 const userCaches = new Map();
 
 const manifestTemplate = {
-    id: 'community.nuvio.groupediptv', version: '3.5.2', name: 'Grouped IPTV (Pro + EPG)',
-    description: 'Dynamic catalogs, aggressive quote-tolerant EPG mapping, and Live Grid Guide.',
+    id: 'community.nuvio.groupediptv', version: '3.6.0', name: 'Grouped IPTV (Pro + EPG)',
+    description: 'Dynamic deduplicated catalogs, search, strict quality grouping, and live EPG.',
     resources: ['catalog', 'meta', 'stream'], types: ['tv'], idPrefixes: ['iptv:']
 };
 
@@ -41,10 +41,16 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
                 const logo = t.match(/tvg-logo=["']([^"']+)["']/i), grp = t.match(/group-title=["']([^"']+)["']/i);
                 const rawName = t.lastIndexOf(',') !== -1 ? t.substring(t.lastIndexOf(',') + 1).trim() : "Unknown";
                 
+                // Clean Channel Name
                 let cName = rawName.replace(/\b(HD|FHD|UHD|4K|8K|SD|RAW|HEVC|1080p|1080i|720p|60fps|50fps|H265|24\/7|VOD)\b|\(.*?\)|\s*\[.*?\]\s*/gi, ' ');
                 cName = cName.replace(/^(?:VIP|UK|US|CA|AU|NZ|IE|ZA|FR|DE|IT|ES|PT|NL|BE|PREMIUM|LOCAL|LIVE)\s*[-:|_\/\|\s]+\s*/gi, ' ');
                 cName = cName.replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
                 const cId = cName.replace(/[^a-z0-9]/g, "") || "unknown";
+                
+                // Clean and Deduplicate Category Name
+                let rawGrp = grp ? grp[1].trim() : 'Uncategorized';
+                let cleanGrp = rawGrp.replace(/\b(HD|FHD|UHD|4K|8K|SD|RAW|HEVC|1080p|1080i|720p|H265|LIVE|VOD)\b/gi, '').replace(/[-:|_\/\|\s]+$/g, '').replace(/\s+/g, ' ').trim();
+                if (!cleanGrp) cleanGrp = rawGrp; // Fallback if name was only quality tags
                 
                 if (tvgId) epgMap.set(tvgId[1].toLowerCase().trim(), cId);
                 if (tvgName) epgMap.set(tvgName[1].toLowerCase().trim(), cId);
@@ -52,7 +58,7 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
                 epgMap.set(rawName.toLowerCase().replace(/\s+/g, ''), cId);
                 epgMap.set(cId, cId);
                 
-                cItem = { cId, cName, rawName, logo: logo ? logo[1] : '', grp: grp ? grp[1].trim() : 'Uncategorized' };
+                cItem = { cId, cName, rawName, logo: logo ? logo[1] : '', grp: cleanGrp };
             } else if (t.startsWith('http') && cItem) {
                 const { cId, cName, rawName, logo, grp } = cItem;
                 const catId = `iptv_${grp.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase()}`;
@@ -78,7 +84,7 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
                     if (line.includes('<programme')) { inProg = true; currP = line; }
                     else if (inProg) { currP += "\n" + line; }
                     if (inProg && line.includes('</programme>')) {
-                        inProg = false; const chMatch = currP.match(/channel=["']([^"']+)["']/i);
+                        inProg = false; const chMatch = currP.match(/channel Gentile=["']([^"']+)["']/i) || currP.match(/channel=["']([^"']+)["']/i);
                         if (chMatch) {
                             const rawEpgId = chMatch[1].toLowerCase().trim();
                             const mId = epgMap.get(rawEpgId) || epgMap.get(rawEpgId.replace(/\s+/g, ''));
