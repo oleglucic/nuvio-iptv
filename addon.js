@@ -9,7 +9,7 @@ app.use(express.json()); app.use(express.urlencoded({ extended: true }));
 const userCaches = new Map();
 
 const manifestTemplate = {
-    id: 'community.nuvio.groupediptv', version: '3.5.1', name: 'Grouped IPTV (Pro + EPG)',
+    id: 'community.nuvio.groupediptv', version: '3.5.2', name: 'Grouped IPTV (Pro + EPG)',
     description: 'Dynamic catalogs, aggressive quote-tolerant EPG mapping, and Live Grid Guide.',
     resources: ['catalog', 'meta', 'stream'], types: ['tv'], idPrefixes: ['iptv:']
 };
@@ -154,7 +154,8 @@ app.get(['/:config/meta/:type/:id.json', '/:config/meta/:type/:id/:extra.json'],
     res.setHeader('Access-Control-Allow-Origin', '*'); res.setHeader('Cache-Control', 'max-age=0, no-cache, no-store, must-revalidate');
     const { config, type, id } = req.params; const chKey = id.replace('iptv:', ''); const ud = userCaches.get(config);
     if (type === 'tv' && ud && ud.status === 'ready' && ud.channelMap.has(chKey)) {
-        const { catalogId, ...sMeta = {} } = JSON.parse(JSON.stringify(ud.channelMap.get(chKey).meta || {}));
+        const targetMeta = ud.channelMap.get(chKey).meta || {};
+        const { catalogId, ...sMeta } = JSON.parse(JSON.stringify(targetMeta));
         sMeta.description = getEpgText(chKey, ud.epgData);
         return res.json({ meta: sMeta });
     }
