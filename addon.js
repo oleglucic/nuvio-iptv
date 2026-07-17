@@ -9,7 +9,7 @@ app.use(express.json()); app.use(express.urlencoded({ extended: true }));
 const userCaches = new Map();
 
 const manifestTemplate = {
-    id: 'community.nuvio.groupedpro', version: '4.2.0', name: 'Grouped IPTV Pro',
+    id: 'community.nuvio.groupedpro', version: '4.3.0', name: 'Grouped IPTV Pro',
     description: 'Dynamic deduplicated catalogs, search, strict quality grouping, and clean stream info.',
     resources: ['catalog', 'meta', 'stream'], types: ['tv'], idPrefixes: ['iptv:']
 };
@@ -21,20 +21,20 @@ function parseXMLDate(x) {
     return new Date(`${x.substring(0,4)}-${x.substring(4,6)}-${x.substring(6,8)}T${x.substring(8,10)}:${x.substring(10,12)}:${x.substring(12,14)}${fOffset}`).getTime();
 }
 
-// Parses original playlist titles to clean up stream choices button layout
+// Fixed field keys to match Stremio's native UI specifications
 function parseStreamInfo(n) {
     const rM = n.match(/\b(4K|8K|UHD|FHD|HD|SD|RAW|1080p|1080i|720p|576p|480p)\b/i);
-    const title = rM ? rM[1].toUpperCase() : "HD";
+    const name = rM ? rM[1].toUpperCase() : "HD";
     const e = [];
     if (/\bVIP\b/i.test(n)) e.push("VIP");
     if (/\b(HEVC|H265)\b/i.test(n)) e.push("HEVC");
     if (/dolby/i.test(n)) e.push("Dolby Audio");
-    if (/\bRAW\b/i.test(n) && title !== "RAW") e.push("RAW");
+    if (/\bRAW\b/i.test(n) && name !== "RAW") e.push("RAW");
     if (/\b60fps\b/i.test(n)) e.push("60FPS");
     if (/\b50fps\b/i.test(n)) e.push("50FPS");
     if (/\b24\/7\b/i.test(n)) e.push("24/7");
     if (/\b(backup|alt)\b/i.test(n)) e.push("ALT LINK");
-    return { title, description: e.length > 0 ? e.join(" • ") : "Direct Stream" };
+    return { name, title: e.length > 0 ? e.join(" • ") : "Direct Stream" };
 }
 
 async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
@@ -83,9 +83,8 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
                     tMap.set(cId, { meta: mItem, streams: [] }); tCat.push(mItem);
                 }
                 
-                // Extracts resolution for title, and metadata array features for the description array
                 const sInfo = parseStreamInfo(rawName);
-                tMap.get(cId).streams.push({ title: sInfo.title, description: sInfo.description, url: t }); 
+                tMap.get(cId).streams.push({ name: sInfo.name, title: sInfo.title, url: t }); 
                 cItem = null;
             }
         }
