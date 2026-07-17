@@ -19,7 +19,6 @@ const manifestTemplate = {
     idPrefixes: ['iptv:']
 };
 
-// Converts messy XMLTV timestamps (20260717140000 +0000) into clean milliseconds
 function parseXMLDate(xmlDate) {
     if (!xmlDate || xmlDate.length < 14) return 0;
     const y = xmlDate.substring(0, 4), m = xmlDate.substring(4, 6), d = xmlDate.substring(6, 8);
@@ -43,7 +42,6 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
     try {
         console.log(`[Stream] Parsing M3U for: ${configKey.substring(0, 10)}`);
         
-        // --- 1. M3U STREAM PARSER ---
         const response = await axios({
             method: 'get', url: m3uUrl, responseType: 'stream',
             headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }, timeout: 60000
@@ -106,7 +104,6 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
             }
         }
 
-        // --- 2. EPG STREAM PARSER (ZERO-MEMORY IMPL) ---
         const tempEpg = {};
         if (epgUrl) {
             console.log(`[Stream] Parsing EPG...`);
@@ -131,7 +128,6 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
                         insideProg = false;
                         const channelMatch = currentProg.match(/channel="([^"]+)"/);
                         
-                        // ONLY save memory if this channel exists in our M3U list!
                         if (channelMatch && tempMap.has(channelMatch[1])) {
                             const startMatch = currentProg.match(/start="([^"]+)"/);
                             const stopMatch = currentProg.match(/stop="([^"]+)"/);
@@ -168,8 +164,6 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
         console.error(`[Stream] Critical Failure:`, err.message);
     }
 }
-
-// --- PROTOCOL ROUTING ---
 app.get('/:config/manifest.json', async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Headers', '*');
@@ -231,9 +225,104 @@ app.get(['/:config/catalog/:type/:id.json', '/:config/catalog/:type/:id/:extra.j
     return res.json({ metas: safeCatalog });
 });
 
-// EPG INJECTOR
 app.get(['/:config/meta/:type/:id.json', '/:config/meta/:type/:id/:extra.json'], (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     const { config, type, id } = req.params;
     const channelKey = id.replace('iptv:', '');
     const userData = userCaches.get(config);
+    
+    if (type === 'tv' && userData && userData.status === 'ready' && userData.channelMap.has(channelKey)) {
+        const { catalogId, ...safeMeta } = JSON.parse(JSON.stringify(userData.channelMap.get(channelKey).meta));
+        
+        const now = Date.now();
+        const channelSchedule = userData.epgData[channelKey];
+        
+        if (channelSchedule) {
+            const currentProgram = channelSchedule.find(p => p.start <= now && p.stop >= now);
+            const nextProgram = channelSchedule.find(p => p.start > now);
+            
+            let epgText = "";
+            if (currentProgram) {
+                const startTime = new Date(currentProgram.start).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                const stopTime = new Date(currentProgram.stop).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                epgText += `🟢 NOW PLAYING (${startTime} - ${stopTime})\n${currentProgram.title}\n${currentProgram.desc}\n\n`;
+            }
+            if (nextProgram) {
+                const nextStartTime = new Date(nextProgram.start).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                epgText += `⏭️ UP NEXT (${nextStartTime})\n${nextProgram.title}`;
+            }
+            if (epgText) safeMeta.description = epgText;
+        } else {
+            safeMeta.description = "No live TV guide schedule available.";
+        }
+
+        return res.json({ meta: safeMeta });
+    }
+    return res.json({ meta: null });
+});
+
+app.get(['/:config/stream/:type/:id.json', '/:config/stream/:type/:id/:extra.json'], (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    const { config, type, id } = req.params;
+    const channelKey = id.replace('iptv:', '');
+    const userData = userCaches.get(config);
+    
+    if (type === 'tv' && userData && userData.status === 'ready' && userData.channelMap.has(channelKey)) {
+        return res.json({ streams: userData.channelMap.get(channelKey).streams });
+    }
+    return res.json({ streams: [] });
+});
+
+app.get('/', (req, res) => {
+    res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Nuvio IPTV Setup</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+        <style>body { background: #0f172a; color: #f8fafc; font-family: sans-serif; }</style>
+    </head>
+    <body class="flex items-center justify-center min-h-screen p-4">
+        <div class="bg-slate-800 p-8 rounded-2xl shadow-xl w-full max-w-lg border border-slate-700">
+            <h1 class="text-2xl font-bold text-indigo-400 mb-2">📺 Nuvio IPTV Pro + EPG</h1>
+            <p class="text-slate-400 text-sm mb-6">Featuring dynamic provider catalogs, native search, prefix deduplication, and a zero-memory TV Guide.</p>
+            
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">M3U Playlist URL</label>
+                    <input type="url" id="m3uInput" oninput="generateLink()" placeholder="https://itv.m3u4u.com/..." class="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-sm focus:outline-none focus:border-indigo-500 text-slate-200">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">XMLTV EPG URL (Optional)</label>
+                    <input type="url" id="epgInput" oninput="generateLink()" placeholder="https://epg.m3u4u.com/..." class="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-sm focus:outline-none focus:border-indigo-500 text-slate-200">
+                </div>
+            </div>
+
+            <div id="installSection" class="hidden mt-6 pt-6 border-t border-slate-700 space-y-3">
+                <a id="installBtn" href="#" class="block text-center bg-indigo-600 hover:bg-indigo-500 text-sm font-medium py-3 rounded-lg transition shadow-md w-full">Install Addon to Nuvio</a>
+                <p class="text-[11px] text-slate-500 text-center">Note: Installation may take 2-4 seconds to load as the server builds your custom categories.</p>
+            </div>
+        </div>
+        <script>
+            function generateLink() {
+                const m3u = document.getElementById('m3uInput').value.trim();
+                const epg = document.getElementById('epgInput').value.trim();
+                const installSection = document.getElementById('installSection');
+                
+                if (!m3u) { installSection.classList.add('hidden'); return; }
+                
+                const configObj = { m3u: m3u };
+                if (epg) configObj.epg = epg;
+                
+                const b64 = btoa(JSON.stringify(configObj));
+                document.getElementById('installBtn').href = 'stremio://' + window.location.host + '/' + b64 + '/manifest.json';
+                installSection.classList.remove('hidden');
+            }
+        </script>
+    </body>
+    </html>
+    `);
+});
+
+app.listen(process.env.PORT || 7000);
