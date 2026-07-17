@@ -22,9 +22,8 @@ const manifestTemplate = {
     catalogs: [{ type: 'tv', id: 'grouped_channels', name: 'Live IPTV' }]
 };
 
-// Background Processing Engine
+// Background Processing Engine (Memory Optimized)
 async function asynchronousFetch(configKey, m3uUrl, epgUrl) {
-    // If already loading or loaded, don't duplicate efforts
     if (userCaches.has(configKey) && userCaches.get(configKey).status === 'loading') return;
 
     userCaches.set(configKey, {
@@ -35,15 +34,21 @@ async function asynchronousFetch(configKey, m3uUrl, epgUrl) {
     });
 
     try {
-        console.log(`[Background] Starting sync for config key: ${configKey.substring(0, 10)}...`);
+        console.log(`[Background] Starting memory-optimized sync for ${configKey.substring(0, 10)}...`);
         
         // 1. Fetch & Parse M3U
         const m3uRes = await axios.get(m3uUrl, { timeout: 30000 });
         const playlist = parseM3U(m3uRes.data);
+        
         const tempMap = new Map();
         const tempCatalog = [];
 
         playlist.items.forEach(item => {
+            // MEMORY SAVER: Skip Video-On-Demand (Movies/Series) based on common file extensions
+            if (item.url.match(/\.(mp4|mkv|avi)$/i) || item.url.includes('/movie/') || item.url.includes('/series/')) {
+                return; 
+            }
+
             const regexFilter = /\s*(\[.*?\]|\(.*?\)|HD|FHD|UHD|4K|SD|RAW|HEVC|1080p|720p)\s*/gi;
             const coreName = item.name.replace(regexFilter, '').trim().toLowerCase();
             const channelId = item.tvg.id || coreName.replace(/[^a-z0-9]/g, "");
@@ -65,22 +70,40 @@ async function asynchronousFetch(configKey, m3uUrl, epgUrl) {
             tempMap.get(channelId).streams.push({ title: streamTitle, url: item.url });
         });
 
-        // 2. Fetch & Parse EPG if provided
+        // Clear raw M3U string from memory immediately
+        m3uRes.data = null; 
+
+        // 2. Fetch & Parse EPG
         let tempEpg = {};
         if (epgUrl) {
             try {
                 const epgRes = await axios.get(epgUrl, { timeout: 45000 });
                 const parsedEpg = epgParser.parse(epgRes.data);
+                
                 parsedEpg.programs.forEach(p => {
-                    if (!tempEpg[p.channel]) tempEpg[p.channel] = [];
-                    tempEpg[p.channel].push(p);
+                    // MEMORY SAVER: Only keep EPG data if the channel actually exists in our filtered list
+                    if (tempMap.has(p.channel)) {
+                        if (!tempEpg[p.channel]) tempEpg[p.channel] = [];
+                        
+                        // Strip out unnecessary heavy metadata (like cast lists) and only keep the basics
+                        tempEpg[p.channel].push({
+                            start: p.start,
+                            stop: p.stop,
+                            title: p.title,
+                            desc: p.desc
+                        });
+                    }
                 });
+                
+                // Clear raw EPG data from memory immediately
+                epgRes.data = null;
+                parsedEpg.programs = null;
+
             } catch (epgErr) {
-                console.error(`[Background] EPG download failed for ${configKey.substring(0, 10)}:`, epgErr.message);
+                console.error(`[Background] EPG download failed:`, epgErr.message);
             }
         }
 
-        // Update Cache Store
         userCaches.set(configKey, {
             status: 'ready',
             channelMap: tempMap,
@@ -88,11 +111,11 @@ async function asynchronousFetch(configKey, m3uUrl, epgUrl) {
             epgData: tempEpg,
             lastUpdated: Date.now()
         });
-        console.log(`[Background] Sync complete for ${configKey.substring(0, 10)}. Grouped into ${tempCatalog.length} channels.`);
+        console.log(`[Background] Sync complete. Grouped into ${tempCatalog.length} channels.`);
 
     } catch (err) {
         userCaches.set(configKey, { status: 'error', message: err.message });
-        console.error(`[Background] Critical Sync Error for ${configKey.substring(0, 10)}:`, err.message);
+        console.error(`[Background] Critical Sync Error:`, err.message);
     }
 }
 
