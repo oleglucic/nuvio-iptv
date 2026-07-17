@@ -8,32 +8,37 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-let M3U_URL = '';
-let EPG_URL = '';
-let channelMap = new Map(); 
-let catalogItems = [];
-let epgData = {};
-let isConfigured = false;
-let statusMessage = "Addon is waiting for configuration.";
+// Global Cache to hold parsed data for different users securely
+// Key: Base64 config string -> Value: { channelMap, catalogItems, epgData, isLoaded }
+const userCaches = new Map();
 
-const manifest = {
+const manifestTemplate = {
     id: 'community.nuvio.groupediptv',
-    version: '1.2.0',
-    name: 'Grouped IPTV Dashboard',
-    description: 'Smart IPTV grouping with live EPG and Web UI configuration.',
+    version: '2.0.0',
+    name: 'Grouped IPTV (Instant)',
+    description: 'Smart IPTV quality grouping with dynamic background fetching.',
     resources: ['catalog', 'meta', 'stream'],
     types: ['tv'],
     catalogs: [{ type: 'tv', id: 'grouped_channels', name: 'Live IPTV' }]
 };
 
-const builder = new addonBuilder(manifest);
+// Background Processing Engine
+async function asynchronousFetch(configKey, m3uUrl, epgUrl) {
+    // If already loading or loaded, don't duplicate efforts
+    if (userCaches.has(configKey) && userCaches.get(configKey).status === 'loading') return;
 
-async function syncIPTVData() {
-    if (!M3U_URL) return;
+    userCaches.set(configKey, {
+        status: 'loading',
+        channelMap: new Map(),
+        catalogItems: [],
+        epgData: {}
+    });
+
     try {
-        statusMessage = "Syncing M3U and EPG data...";
+        console.log(`[Background] Starting sync for config key: ${configKey.substring(0, 10)}...`);
         
-        const m3uRes = await axios.get(M3U_URL);
+        // 1. Fetch & Parse M3U
+        const m3uRes = await axios.get(m3uUrl, { timeout: 30000 });
         const playlist = parseM3U(m3uRes.data);
         const tempMap = new Map();
         const tempCatalog = [];
@@ -51,7 +56,7 @@ async function syncIPTVData() {
                     name: coreName.replace(/\b\w/g, char => char.toUpperCase()), 
                     poster: item.tvg.logo || '',
                     background: item.tvg.logo || '',
-                    description: `Loading guide data...`,
+                    description: `Synchronizing live schedule guide...`,
                     genres: [item.group.title || 'Live TV']
                 };
                 tempMap.set(channelId, { meta: metaItem, streams: [] });
@@ -60,42 +65,92 @@ async function syncIPTVData() {
             tempMap.get(channelId).streams.push({ title: streamTitle, url: item.url });
         });
 
-        channelMap = tempMap;
-        catalogItems = tempCatalog;
-
-        if (EPG_URL) {
-            const epgRes = await axios.get(EPG_URL);
-            const parsedEpg = epgParser.parse(epgRes.data);
-            const tempEpg = {};
-            parsedEpg.programs.forEach(p => {
-                if (!tempEpg[p.channel]) tempEpg[p.channel] = [];
-                tempEpg[p.channel].push(p);
-            });
-            epgData = tempEpg;
+        // 2. Fetch & Parse EPG if provided
+        let tempEpg = {};
+        if (epgUrl) {
+            try {
+                const epgRes = await axios.get(epgUrl, { timeout: 45000 });
+                const parsedEpg = epgParser.parse(epgRes.data);
+                parsedEpg.programs.forEach(p => {
+                    if (!tempEpg[p.channel]) tempEpg[p.channel] = [];
+                    tempEpg[p.channel].push(p);
+                });
+            } catch (epgErr) {
+                console.error(`[Background] EPG download failed for ${configKey.substring(0, 10)}:`, epgErr.message);
+            }
         }
 
-        isConfigured = true;
-        statusMessage = `Ready. Successfully loaded ${catalogItems.length} unique channels.`;
-        console.log(statusMessage);
+        // Update Cache Store
+        userCaches.set(configKey, {
+            status: 'ready',
+            channelMap: tempMap,
+            catalogItems: tempCatalog,
+            epgData: tempEpg,
+            lastUpdated: Date.now()
+        });
+        console.log(`[Background] Sync complete for ${configKey.substring(0, 10)}. Grouped into ${tempCatalog.length} channels.`);
+
     } catch (err) {
-        statusMessage = `Error syncing data: ${err.message}`;
-        console.error(statusMessage);
+        userCaches.set(configKey, { status: 'error', message: err.message });
+        console.error(`[Background] Critical Sync Error for ${configKey.substring(0, 10)}:`, err.message);
     }
 }
 
-setInterval(() => { if(isConfigured) syncIPTVData(); }, 6 * 60 * 60 * 1000);
+// Helper to decode Base64 URL configurationsafely
+function decodeConfig(configParam) {
+    try {
+        const decoded = Buffer.from(configParam, 'base64').toString('utf-8');
+        return JSON.parse(decoded);
+    } catch (e) {
+        return null;
+    }
+}
 
-builder.defineCatalogHandler(({ type, id }) => {
-    if (type === 'tv' && id === 'grouped_channels') return Promise.resolve({ catalogs: catalogItems });
-    return Promise.resolve({ catalogs: [] });
+// --- STREMIO / NUVIO PROTOCOL ROUTING ---
+
+// Dynamic Manifest Delivery (Instant Response)
+app.get('/:config/manifest.json', (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Headers', '*');
+    
+    const configData = decodeConfig(req.params.config);
+    if (!configData || !configData.m3u) {
+        return res.status(400).json({ error: "Invalid configuration string" });
+    }
+
+    // Trigger background loading immediately upon installation check, completely unblocking the UI response
+    asynchronousFetch(req.params.config, configData.m3u, configData.epg);
+
+    // Deep copy template manifest and attach specific configuration to it
+    const instanceManifest = JSON.parse(JSON.stringify(manifestTemplate));
+    res.json(instanceManifest);
 });
 
-builder.defineMetaHandler(({ type, id }) => {
+// Dynamic Catalog Endpoint
+app.get('/:config/catalog/:type/:id.json', (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    const { config, type, id } = req.params;
+    
+    const userData = userCaches.get(config);
+    if (type === 'tv' && id === 'grouped_channels' && userData && userData.status === 'ready') {
+        return res.json({ catalogs: userData.catalogItems });
+    }
+    
+    // If the server is still parsing in background, return temporary empty state gracefully
+    return res.json({ catalogs: [] });
+});
+
+// Dynamic Meta (EPG Details) Endpoint
+app.get('/:config/meta/:type/:id.json', (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    const { config, type, id } = req.params;
     const channelKey = id.replace('iptv:', '');
-    if (type === 'tv' && channelMap.has(channelKey)) {
-        let metaResponse = JSON.parse(JSON.stringify(channelMap.get(channelKey).meta));
+    
+    const userData = userCaches.get(config);
+    if (type === 'tv' && userData && userData.status === 'ready' && userData.channelMap.has(channelKey)) {
+        let metaResponse = JSON.parse(JSON.stringify(userData.channelMap.get(channelKey).meta));
         const now = new Date();
-        const channelSchedule = epgData[channelKey];
+        const channelSchedule = userData.epgData[channelKey];
         
         if (channelSchedule) {
             const currentProgram = channelSchedule.find(p => new Date(p.start) <= now && new Date(p.stop) >= now);
@@ -114,17 +169,25 @@ builder.defineMetaHandler(({ type, id }) => {
         } else {
             metaResponse.description = "No live TV guide metadata mapped for this channel.";
         }
-        return Promise.resolve({ meta: metaResponse });
+        return res.json({ meta: metaResponse });
     }
-    return Promise.resolve({ meta: null });
+    return res.json({ meta: null });
 });
 
-builder.defineStreamHandler(({ type, id }) => {
+// Dynamic Stream Endpoint
+app.get('/:config/stream/:type/:id.json', (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    const { config, type, id } = req.params;
     const channelKey = id.replace('iptv:', '');
-    if (type === 'tv' && channelMap.has(channelKey)) return Promise.resolve({ streams: channelMap.get(channelKey).streams });
-    return Promise.resolve({ streams: [] });
+    
+    const userData = userCaches.get(config);
+    if (type === 'tv' && userData && userData.status === 'ready' && userData.channelMap.has(channelKey)) {
+        return res.json({ streams: userData.channelMap.get(channelKey).streams });
+    }
+    return res.json({ streams: [] });
 });
 
+// --- CLIENT-SIDE FRONTEND CONFIGURATION DASHBOARD ---
 app.get('/', (req, res) => {
     const html = `
     <!DOCTYPE html>
@@ -137,58 +200,56 @@ app.get('/', (req, res) => {
     </head>
     <body class="flex items-center justify-center min-h-screen p-4">
         <div class="bg-slate-800 p-8 rounded-2xl shadow-xl w-full max-w-lg border border-slate-700">
-            <h1 class="text-2xl font-bold text-indigo-400 mb-2">📺 IPTV Grouper Setup</h1>
-            <p class="text-slate-400 text-sm mb-6">Enter your m3u4u details below to merge quality streams under single channel icons.</p>
+            <h1 class="text-2xl font-bold text-indigo-400 mb-2">📺 Instant IPTV Grouper</h1>
+            <p class="text-slate-400 text-sm mb-6">Paste your links. An installation string will generate in real time without making you wait.</p>
             
-            <form action="/save" method="POST" class="space-y-4">
+            <div class="space-y-4">
                 <div>
                     <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">M3U Playlist URL</label>
-                    <input type="url" name="m3u" value="${M3U_URL}" required placeholder="https://itv.m3u4u.com/..." class="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-sm focus:outline-none focus:border-indigo-500 text-slate-200">
+                    <input type="url" id="m3uInput" oninput="generateLink()" placeholder="https://itv.m3u4u.com/..." class="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-sm focus:outline-none focus:border-indigo-500 text-slate-200">
                 </div>
                 <div>
-                    <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">XMLTV EPG URL</label>
-                    <input type="url" name="epg" value="${EPG_URL}" placeholder="https://epg.m3u4u.com/..." class="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-sm focus:outline-none focus:border-indigo-500 text-slate-200">
+                    <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">XMLTV EPG URL (Optional)</label>
+                    <input type="url" id="epgInput" oninput="generateLink()" placeholder="https://epg.m3u4u.com/..." class="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-sm focus:outline-none focus:border-indigo-500 text-slate-200">
                 </div>
-                <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-500 font-medium py-3 rounded-lg transition text-sm cursor-pointer shadow-md">Save & Sync Playlist</button>
-            </form>
-
-            <div class="mt-6 pt-6 border-t border-slate-700">
-                <span class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Status Log</span>
-                <div class="bg-slate-900 text-xs font-mono p-3 rounded-lg border border-slate-700 text-emerald-400 break-words">${statusMessage}</div>
             </div>
 
-            ${isConfigured ? `
-            <div class="mt-6 flex gap-3">
-                <a href="stremio://${req.get('host')}/manifest.json" class="flex-1 text-center bg-emerald-600 hover:bg-emerald-500 text-sm font-medium py-3 rounded-lg transition shadow-md">✨ Install Addon</a>
+            <div id="installSection" class="hidden mt-6 pt-6 border-t border-slate-700 space-y-3">
+                <span class="block text-xs font-semibold text-emerald-400 uppercase tracking-wider">✨ Addon Ready Instantly</span>
+                <a id="installBtn" href="#" class="block text-center bg-emerald-600 hover:bg-emerald-500 text-sm font-medium py-3 rounded-lg transition shadow-md w-full">Install Addon to Nuvio</a>
+                <p class="text-[11px] text-slate-500 text-center">If installing on a different device, your custom manifest URL is below:</p>
+                <input type="text" id="manifestUrlBox" readonly onclick="this.select()" class="w-full bg-slate-900 border border-slate-700 text-[11px] font-mono p-2 rounded text-slate-400 select-all text-center focus:outline-none">
             </div>
-            ` : ''}
         </div>
+
+        <script>
+            function generateLink() {
+                const m3u = document.getElementById('m3uInput').value.trim();
+                const epg = document.getElementById('epgInput').value.trim();
+                const installSection = document.getElementById('installSection');
+                
+                if (!m3u) {
+                    installSection.classList.add('hidden');
+                    return;
+                }
+
+                // Create JSON object configuration and convert straight to base64
+                const configObj = { m3u: m3u, epg: epg };
+                const b64 = btoa(JSON.stringify(configObj));
+                
+                const hostUrl = window.location.host;
+                const manifestUrl = window.location.protocol + '//' + hostUrl + '/' + b64 + '/manifest.json';
+                const stremioUrl = 'stremio://' + hostUrl + '/' + b64 + '/manifest.json';
+
+                document.getElementById('installBtn').href = stremioUrl;
+                document.getElementById('manifestUrlBox').value = manifestUrl;
+                installSection.classList.remove('hidden');
+            }
+        </script>
     </body>
     </html>
     `;
     res.send(html);
-});
-
-app.post('/save', async (req, res) => {
-    M3U_URL = req.body.m3u;
-    EPG_URL = req.body.epg;
-    res.redirect('/');
-    await syncIPTVData();
-});
-
-const addonInterface = builder.getInterface();
-app.get('/manifest.json', (req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Headers', '*');
-    res.json(addonInterface.manifest);
-});
-app.get('/:resource/:type/:id.json', (req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Headers', '*');
-    const { resource, type, id } = req.params;
-    addonInterface.handle(resource, type, id)
-        .then(resp => res.json(resp))
-        .catch(err => res.status(500).json({ error: err.message }));
 });
 
 app.listen(process.env.PORT || 7000);
