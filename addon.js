@@ -9,8 +9,8 @@ app.use(express.json()); app.use(express.urlencoded({ extended: true }));
 const userCaches = new Map();
 
 const manifestTemplate = {
-    id: 'community.nuvio.groupedpro', version: '4.3.0', name: 'Grouped IPTV Pro',
-    description: 'Dynamic deduplicated catalogs, search, strict quality grouping, and clean stream info.',
+    id: 'community.nuvio.groupedpro', version: '4.4.0', name: 'Grouped IPTV Pro',
+    description: 'Dynamic deduplicated catalogs, search, quality sorting, and clean stream spec tags.',
     resources: ['catalog', 'meta', 'stream'], types: ['tv'], idPrefixes: ['iptv:']
 };
 
@@ -21,20 +21,30 @@ function parseXMLDate(x) {
     return new Date(`${x.substring(0,4)}-${x.substring(4,6)}-${x.substring(6,8)}T${x.substring(8,10)}:${x.substring(10,12)}:${x.substring(12,14)}${fOffset}`).getTime();
 }
 
-// Fixed field keys to match Stremio's native UI specifications
+// Converts punctuation into spaces to cleanly catch slash-joined traits, then calculates a sorting matrix weight
 function parseStreamInfo(n) {
-    const rM = n.match(/\b(4K|8K|UHD|FHD|HD|SD|RAW|1080p|1080i|720p|576p|480p)\b/i);
-    const name = rM ? rM[1].toUpperCase() : "HD";
+    const cleanN = n.replace(/[\/_\-]/g, ' ');
+    
+    let name = "HD";
+    let score = 50;
+    
+    if (/\b8K\b/i.test(cleanN)) { name = "8K"; score = 80; }
+    else if (/\b(4K|UHD)\b/i.test(cleanN)) { name = "4K"; score = 70; }
+    else if (/\b(FHD|1080p|1080i)\b/i.test(cleanN)) { name = "FHD"; score = 60; }
+    else if (/\b(HD|720p)\b/i.test(cleanN)) { name = "HD"; score = 50; }
+    else if (/\b(SD|576p|480p)\b/i.test(cleanN)) { name = "SD"; score = 40; }
+    
     const e = [];
-    if (/\bVIP\b/i.test(n)) e.push("VIP");
-    if (/\b(HEVC|H265)\b/i.test(n)) e.push("HEVC");
-    if (/dolby/i.test(n)) e.push("Dolby Audio");
-    if (/\bRAW\b/i.test(n) && name !== "RAW") e.push("RAW");
-    if (/\b60fps\b/i.test(n)) e.push("60FPS");
-    if (/\b50fps\b/i.test(n)) e.push("50FPS");
-    if (/\b24\/7\b/i.test(n)) e.push("24/7");
-    if (/\b(backup|alt)\b/i.test(n)) e.push("ALT LINK");
-    return { name, title: e.length > 0 ? e.join(" • ") : "Direct Stream" };
+    if (/\bVIP\b/i.test(cleanN)) { e.push("VIP"); score += 5; }
+    if (/\b(HEVC|H265)\b/i.test(cleanN)) { e.push("HEVC"); score += 4; }
+    if (/dolby/i.test(cleanN)) { e.push("Dolby Audio"); score += 3; }
+    if (/\bRAW\b/i.test(cleanN)) { e.push("RAW"); score += 6; }
+    if (/\b60fps\b/i.test(cleanN)) { e.push("60FPS"); score += 2; }
+    if (/\b50fps\b/i.test(cleanN)) { e.push("50FPS"); score += 1; }
+    if (/\b24\/7\b/i.test(cleanN)) e.push("24/7");
+    if (/\b(backup|alt)\b/i.test(cleanN)) { e.push("ALT LINK"); score -= 30; }
+    
+    return { name, title: e.length > 0 ? e.join(" • ") : "Direct Stream", score };
 }
 
 async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
@@ -84,7 +94,7 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
                 }
                 
                 const sInfo = parseStreamInfo(rawName);
-                tMap.get(cId).streams.push({ name: sInfo.name, title: sInfo.title, url: t }); 
+                tMap.get(cId).streams.push({ name: sInfo.name, title: sInfo.title, url: t, score: sInfo.score }); 
                 cItem = null;
             }
         }
@@ -189,7 +199,13 @@ app.get(['/:config/meta/:type/:id.json', '/:config/meta/:type/:id/:extra.json'],
 app.get(['/:config/stream/:type/:id.json', '/:config/stream/:type/:id/:extra.json'], (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     const { config, type, id } = req.params; const chKey = id.replace('iptv:', ''); const ud = userCaches.get(config);
-    if (type === 'tv' && ud && ud.status === 'ready' && ud.channelMap.has(chKey)) return res.json({ streams: ud.channelMap.get(chKey).streams });
+    if (type === 'tv' && ud && ud.status === 'ready' && ud.channelMap.has(chKey)) {
+        // Sorts streams descending based on calculated performance metric score, then hides score property from final response
+        const sortedStreams = [...ud.channelMap.get(chKey).streams]
+            .sort((a, b) => b.score - a.score)
+            .map(({ score, ...cleanStream }) => cleanStream);
+        return res.json({ streams: sortedStreams });
+    }
     return res.json({ streams: [] });
 });
 
