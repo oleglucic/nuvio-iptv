@@ -2,13 +2,14 @@ const { addonBuilder } = require('stremio-addon-sdk');
 const express = require('express');
 const axios = require('axios');
 const readline = require('readline');
+const zlib = require('zlib');
 
 const app = express();
 app.use(express.json()); app.use(express.urlencoded({ extended: true }));
 const userCaches = new Map();
 
 const manifestTemplate = {
-    id: 'community.nuvio.groupediptv', version: '3.4.0', name: 'Grouped IPTV (Pro + EPG)',
+    id: 'community.nuvio.groupediptv', version: '3.5.0', name: 'Grouped IPTV (Pro + EPG)',
     description: 'Dynamic catalogs, aggressive EPG mapping, and Live Grid Guide.',
     resources: ['catalog', 'meta', 'stream'], types: ['tv'], idPrefixes: ['iptv:']
 };
@@ -25,23 +26,31 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
     userCaches.set(configKey, { status: 'loading', channelMap: new Map(), catalogItems: [], uniqueGroups: new Set(), epgData: {} });
     
     try {
-        const res = await axios({ method: 'get', url: m3uUrl, responseType: 'stream', headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 60000 });
-        const rl = readline.createInterface({ input: res.data, crlfDelay: Infinity });
+        const res = await axios({ method: 'get', url: m3uUrl, responseType: 'stream', headers: { 'Accept-Encoding': 'gzip,deflate', 'User-Agent': 'Mozilla/5.0' }, timeout: 60000 });
+        let mStream = res.data;
+        if (res.headers['content-encoding'] === 'gzip' || m3uUrl.toLowerCase().endsWith('.gz')) mStream = mStream.pipe(zlib.createGunzip());
+        const rl = readline.createInterface({ input: mStream, crlfDelay: Infinity });
+        
         const tMap = new Map(), tCat = []; const groups = new Set(), epgMap = new Map(); let cItem = null;
         
         for await (const line of rl) {
             const t = line.trim();
             if (t.startsWith('#EXTINF:')) {
                 if (t.match(/\.(mp4|mkv)$/i) || t.includes('/movie/') || t.includes('/series/')) { cItem = null; continue; }
-                const tvgId = t.match(/tvg-id="([^"]+)"/i), logo = t.match(/tvg-logo="([^"]+)"/i), grp = t.match(/group-title="([^"]+)"/i);
+                const tvgId = t.match(/tvg-id="([^"]+)"/i), tvgName = t.match(/tvg-name="([^"]+)"/i);
+                const logo = t.match(/tvg-logo="([^"]+)"/i), grp = t.match(/group-title="([^"]+)"/i);
                 const rawName = t.lastIndexOf(',') !== -1 ? t.substring(t.lastIndexOf(',') + 1).trim() : "Unknown";
+                
                 let cName = rawName.replace(/\b(HD|FHD|UHD|4K|8K|SD|RAW|HEVC|1080p|1080i|720p|60fps|50fps|H265|24\/7|VOD)\b|\(.*?\)|\s*\[.*?\]\s*/gi, ' ');
                 cName = cName.replace(/^(?:VIP|UK|US|CA|AU|NZ|IE|ZA|FR|DE|IT|ES|PT|NL|BE|PREMIUM|LOCAL|LIVE)\s*[-:|_\/\|\s]+\s*/gi, ' ');
                 cName = cName.replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
                 const cId = cName.replace(/[^a-z0-9]/g, "") || "unknown";
                 
-                if (tvgId) epgMap.set(tvgId[1].toLowerCase(), cId);
-                epgMap.set(cId, cId); epgMap.set(rawName.toLowerCase(), cId);
+                if (tvgId) epgMap.set(tvgId[1].toLowerCase().trim(), cId);
+                if (tvgName) epgMap.set(tvgName[1].toLowerCase().trim(), cId);
+                epgMap.set(rawName.toLowerCase().trim(), cId);
+                epgMap.set(rawName.toLowerCase().replace(/\s+/g, ''), cId);
+                epgMap.set(cId, cId);
                 
                 cItem = { cId, cName, rawName, logo: logo ? logo[1] : '', grp: grp ? grp[1].trim() : 'Uncategorized' };
             } else if (t.startsWith('http') && cItem) {
@@ -56,11 +65,14 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
             }
         }
         
-        const tEpg = {};
+        const tEpg = {}; let eCount = 0;
         if (epgUrl) {
             try {
-                const epgRes = await axios({ method: 'get', url: epgUrl, responseType: 'stream', headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 60000 });
-                const rlEpg = readline.createInterface({ input: epgRes.data, crlfDelay: Infinity });
+                const epgRes = await axios({ method: 'get', url: epgUrl, responseType: 'stream', headers: { 'Accept-Encoding': 'gzip,deflate', 'User-Agent': 'Mozilla/5.0' }, timeout: 60000 });
+                let eStream = epgRes.data;
+                if (epgRes.headers['content-encoding'] === 'gzip' || epgUrl.toLowerCase().endsWith('.gz')) eStream = eStream.pipe(zlib.createGunzip());
+                const rlEpg = readline.createInterface({ input: eStream, crlfDelay: Infinity });
+                
                 let inProg = false, currP = "";
                 for await (const line of rlEpg) {
                     if (line.includes('<programme')) { inProg = true; currP = line; }
@@ -68,17 +80,20 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
                     if (inProg && line.includes('</programme>')) {
                         inProg = false; const chMatch = currP.match(/channel="([^"]+)"/i);
                         if (chMatch) {
-                            const mId = epgMap.get(chMatch[1].toLowerCase());
+                            const rawEpgId = chMatch[1].toLowerCase().trim();
+                            const mId = epgMap.get(rawEpgId) || epgMap.get(rawEpgId.replace(/\s+/g, ''));
                             if (mId && tMap.has(mId)) {
                                 const startMatch = currP.match(/start="([^"]+)"/), stopMatch = currP.match(/stop="([^"]+)"/);
                                 const titleMatch = currP.match(/<title[^>]*>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/i);
                                 const descMatch = currP.match(/<desc[^>]*>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/desc>/i);
                                 if (!tEpg[mId]) tEpg[mId] = [];
                                 tEpg[mId].push({ start: parseXMLDate(startMatch ? startMatch[1] : ""), stop: parseXMLDate(stopMatch ? stopMatch[1] : ""), title: titleMatch ? titleMatch[1].trim() : "Unknown", desc: descMatch ? descMatch[1].trim() : "" });
+                                eCount++;
                             }
                         }
                     }
                 }
+                console.log(`[Stream] EPG Zlib Parser successfully mapped ${eCount} programs!`);
             } catch (e) { console.error(`EPG Error:`, e.message); }
         }
         userCaches.set(configKey, { status: 'ready', channelMap: tMap, catalogItems: tCat, uniqueGroups: groups, epgData: tEpg, lastUpdated: Date.now() });
@@ -127,7 +142,6 @@ app.get(['/:config/catalog/:type/:id.json', '/:config/catalog/:type/:id/:extra.j
     let fCat = ud.catalogItems.filter(i => i.catalogId === id);
     if (search) fCat = fCat.filter(i => i.name.toLowerCase().includes(search));
     
-    // Inject EPG directly into the catalog items so Nuvio shows it on the grid
     const paged = fCat.slice(skip, skip + 100).map(item => {
         const chKey = item.id.replace('iptv:', '');
         const { catalogId, ...rest } = item;
