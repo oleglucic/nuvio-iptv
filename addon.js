@@ -11,9 +11,9 @@ const userCaches = new Map();
 
 const manifestTemplate = {
     id: 'community.nuvio.groupediptv',
-    version: '3.1.0',
+    version: '3.2.0',
     name: 'Grouped IPTV (Pro + EPG)',
-    description: 'Dynamic catalogs, search, prefix deduplication, and live EPG.',
+    description: 'Dynamic catalogs, search, strict prefix deduplication, and live EPG.',
     resources: ['catalog', 'meta', 'stream'],
     types: ['tv'],
     idPrefixes: ['iptv:']
@@ -32,138 +32,6 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
     if (userCaches.has(configKey) && userCaches.get(configKey).status === 'loading') return;
 
     userCaches.set(configKey, {
-        status: 'loading',
-        channelMap: new Map(),
-        catalogItems: [],
-        uniqueGroups: new Set(),
-        epgData: {}
-    });
-
-    try {
-        console.log(`[Stream] Parsing M3U for: ${configKey.substring(0, 10)}`);
-        
-        const response = await axios({
-            method: 'get', url: m3uUrl, responseType: 'stream',
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }, timeout: 60000
-        });
-
-        const rl = readline.createInterface({ input: response.data, crlfDelay: Infinity });
-
-        const tempMap = new Map();
-        const tempCatalog = [];
-        const groups = new Set();
-        let currentItem = null;
-
-        for await (const line of rl) {
-            const trimmed = line.trim();
-            if (trimmed.startsWith('#EXTINF:')) {
-                if (trimmed.match(/\.(mp4|mkv)$/i) || trimmed.includes('/movie/') || trimmed.includes('/series/')) {
-                    currentItem = null; continue;
-                }
-
-                const tvgIdMatch = trimmed.match(/tvg-id="([^"]+)"/i);
-                const logoMatch = trimmed.match(/tvg-logo="([^"]+)"/i);
-                const groupMatch = trimmed.match(/group-title="([^"]+)"/i);
-                
-                const commaIndex = trimmed.lastIndexOf(',');
-                const rawName = commaIndex !== -1 ? trimmed.substring(commaIndex + 1).trim() : "Unknown Channel";
-                const groupName = groupMatch ? groupMatch[1].trim() : 'Uncategorized';
-
-                const qualityFilter = /\s*(\[.*?\]|\(.*?\)|HD|FHD|UHD|4K|SD|RAW|HEVC|1080p|720p|60fps|50fps)\s*/gi;
-                let cleanName = rawName.replace(qualityFilter, '').trim();
-
-                const prefixFilter = /^(VIP|UK|US|CA|AU|NZ|IE|ZA|FR|DE|IT|ES|PT|NL|BE|PREMIUM|LOCAL|VOD|LIVE|24\/7)\s*[-|:|\||_]?\s*/gi;
-                cleanName = cleanName.replace(prefixFilter, '').trim();
-
-                const coreName = cleanName.toLowerCase();
-                const channelId = (tvgIdMatch && tvgIdMatch[1] !== "") ? tvgIdMatch[1] : coreName.replace(/[^a-z0-9]/g, "");
-
-                currentItem = {
-                    channelId: channelId || "unknown", coreName: cleanName,
-                    streamTitle: rawName, logo: logoMatch ? logoMatch[1] : '', group: groupName
-                };
-            } else if (trimmed.startsWith('http') && currentItem) {
-                const { channelId, coreName, streamTitle, logo, group } = currentItem;
-                const generatedCatalogId = `iptv_${group.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase()}`;
-
-                groups.add(group);
-
-                if (!tempMap.has(channelId)) {
-                    const metaItem = {
-                        id: `iptv:${channelId}`, type: 'tv',
-                        name: coreName.replace(/\b\w/g, char => char.toUpperCase()),
-                        poster: logo, background: logo,
-                        description: `Live Stream: ${coreName.toUpperCase()}`,
-                        genres: [group], catalogId: generatedCatalogId 
-                    };
-                    tempMap.set(channelId, { meta: metaItem, streams: [] });
-                    tempCatalog.push(metaItem);
-                }
-                tempMap.get(channelId).streams.push({ title: streamTitle, url: trimmed });
-                currentItem = null; 
-            }
-        }
-
-        const tempEpg = {};
-        if (epgUrl) {
-            console.log(`[Stream] Parsing EPG...`);
-            try {
-                const epgRes = await axios({
-                    method: 'get', url: epgUrl, responseType: 'stream',
-                    headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 60000
-                });
-                const rlEpg = readline.createInterface({ input: epgRes.data, crlfDelay: Infinity });
-                
-                let insideProg = false;
-                let currentProg = "";
-                
-                for await (const line of rlEpg) {
-                    if (line.includes('<programme')) {
-                        insideProg = true; currentProg = line;
-                    } else if (insideProg) {
-                        currentProg += "\n" + line;
-                    }
-                    
-                    if (insideProg && line.includes('</programme>')) {
-                        insideProg = false;
-                        const channelMatch = currentProg.match(/channel="([^"]+)"/);
-                        
-                        if (channelMatch && tempMap.has(channelMatch[1])) {
-                            const startMatch = currentProg.match(/start="([^"]+)"/);
-                            const stopMatch = currentProg.match(/stop="([^"]+)"/);
-                            const titleMatch = currentProg.match(/<title[^>]*>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?<\/title>/i);
-                            const descMatch = currentProg.match(/<desc[^>]*>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?<\/desc>/i);
-                            
-                            const channelId = channelMatch[1];
-                            if (!tempEpg[channelId]) tempEpg[channelId] = [];
-                            
-                            tempEpg[channelId].push({
-                                start: parseXMLDate(startMatch ? startMatch[1] : ""),
-                                stop: parseXMLDate(stopMatch ? stopMatch[1] : ""),
-                                title: titleMatch ? titleMatch[1].trim() : "Unknown Program",
-                                desc: descMatch ? descMatch[1].trim() : ""
-                            });
-                        }
-                    }
-                }
-                console.log(`[Stream] EPG Guide successfully matched to channels.`);
-            } catch (epgErr) {
-                console.error(`[Stream] EPG parsing failed:`, epgErr.message);
-            }
-        }
-
-        userCaches.set(configKey, {
-            status: 'ready', channelMap: tempMap, catalogItems: tempCatalog,
-            uniqueGroups: groups, epgData: tempEpg, lastUpdated: Date.now()
-        });
-
-        console.log(`[Stream] Complete! Mapped to ${groups.size} provider catalogs.`);
-
-    } catch (err) {
-        userCaches.set(configKey, { status: 'error', message: err.message });
-        console.error(`[Stream] Critical Failure:`, err.message);
-    }
-}
 app.get('/:config/manifest.json', async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Headers', '*');
@@ -258,6 +126,8 @@ app.get(['/:config/meta/:type/:id.json', '/:config/meta/:type/:id/:extra.json'],
 
         return res.json({ meta: safeMeta });
     }
+    return res.json({ meta: null
+    }
     return res.json({ meta: null });
 });
 
@@ -309,20 +179,3 @@ app.get('/', (req, res) => {
                 const m3u = document.getElementById('m3uInput').value.trim();
                 const epg = document.getElementById('epgInput').value.trim();
                 const installSection = document.getElementById('installSection');
-                
-                if (!m3u) { installSection.classList.add('hidden'); return; }
-                
-                const configObj = { m3u: m3u };
-                if (epg) configObj.epg = epg;
-                
-                const b64 = btoa(JSON.stringify(configObj));
-                document.getElementById('installBtn').href = 'stremio://' + window.location.host + '/' + b64 + '/manifest.json';
-                installSection.classList.remove('hidden');
-            }
-        </script>
-    </body>
-    </html>
-    `);
-});
-
-app.listen(process.env.PORT || 7000);
