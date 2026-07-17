@@ -9,8 +9,8 @@ app.use(express.json()); app.use(express.urlencoded({ extended: true }));
 const userCaches = new Map();
 
 const manifestTemplate = {
-    id: 'community.nuvio.groupediptv', version: '3.5.0', name: 'Grouped IPTV (Pro + EPG)',
-    description: 'Dynamic catalogs, aggressive EPG mapping, and Live Grid Guide.',
+    id: 'community.nuvio.groupediptv', version: '3.5.1', name: 'Grouped IPTV (Pro + EPG)',
+    description: 'Dynamic catalogs, aggressive quote-tolerant EPG mapping, and Live Grid Guide.',
     resources: ['catalog', 'meta', 'stream'], types: ['tv'], idPrefixes: ['iptv:']
 };
 
@@ -37,8 +37,8 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
             const t = line.trim();
             if (t.startsWith('#EXTINF:')) {
                 if (t.match(/\.(mp4|mkv)$/i) || t.includes('/movie/') || t.includes('/series/')) { cItem = null; continue; }
-                const tvgId = t.match(/tvg-id="([^"]+)"/i), tvgName = t.match(/tvg-name="([^"]+)"/i);
-                const logo = t.match(/tvg-logo="([^"]+)"/i), grp = t.match(/group-title="([^"]+)"/i);
+                const tvgId = t.match(/tvg-id=["']([^"']+)["']/i), tvgName = t.match(/tvg-name=["']([^"']+)["']/i);
+                const logo = t.match(/tvg-logo=["']([^"']+)["']/i), grp = t.match(/group-title=["']([^"']+)["']/i);
                 const rawName = t.lastIndexOf(',') !== -1 ? t.substring(t.lastIndexOf(',') + 1).trim() : "Unknown";
                 
                 let cName = rawName.replace(/\b(HD|FHD|UHD|4K|8K|SD|RAW|HEVC|1080p|1080i|720p|60fps|50fps|H265|24\/7|VOD)\b|\(.*?\)|\s*\[.*?\]\s*/gi, ' ');
@@ -78,12 +78,12 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
                     if (line.includes('<programme')) { inProg = true; currP = line; }
                     else if (inProg) { currP += "\n" + line; }
                     if (inProg && line.includes('</programme>')) {
-                        inProg = false; const chMatch = currP.match(/channel="([^"]+)"/i);
+                        inProg = false; const chMatch = currP.match(/channel=["']([^"']+)["']/i);
                         if (chMatch) {
                             const rawEpgId = chMatch[1].toLowerCase().trim();
                             const mId = epgMap.get(rawEpgId) || epgMap.get(rawEpgId.replace(/\s+/g, ''));
                             if (mId && tMap.has(mId)) {
-                                const startMatch = currP.match(/start="([^"]+)"/), stopMatch = currP.match(/stop="([^"]+)"/);
+                                const startMatch = currP.match(/start=["']([^"']+)["']/), stopMatch = currP.match(/stop=["']([^"']+)["']/);
                                 const titleMatch = currP.match(/<title[^>]*>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/i);
                                 const descMatch = currP.match(/<desc[^>]*>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/desc>/i);
                                 if (!tEpg[mId]) tEpg[mId] = [];
@@ -154,7 +154,7 @@ app.get(['/:config/meta/:type/:id.json', '/:config/meta/:type/:id/:extra.json'],
     res.setHeader('Access-Control-Allow-Origin', '*'); res.setHeader('Cache-Control', 'max-age=0, no-cache, no-store, must-revalidate');
     const { config, type, id } = req.params; const chKey = id.replace('iptv:', ''); const ud = userCaches.get(config);
     if (type === 'tv' && ud && ud.status === 'ready' && ud.channelMap.has(chKey)) {
-        const { catalogId, ...sMeta } = JSON.parse(JSON.stringify(ud.channelMap.get(chKey).meta));
+        const { catalogId, ...sMeta = {} } = JSON.parse(JSON.stringify(ud.channelMap.get(chKey).meta || {}));
         sMeta.description = getEpgText(chKey, ud.epgData);
         return res.json({ meta: sMeta });
     }
