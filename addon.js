@@ -9,8 +9,8 @@ app.use(express.json()); app.use(express.urlencoded({ extended: true }));
 const userCaches = new Map();
 
 const manifestTemplate = {
-    id: 'community.nuvio.groupedpro', version: '4.4.0', name: 'Grouped IPTV Pro',
-    description: 'Dynamic deduplicated catalogs, search, quality sorting, and clean stream spec tags.',
+    id: 'community.nuvio.groupedpro', version: '4.6.0', name: 'Grouped IPTV Pro',
+    description: 'Dynamic deduplicated catalogs, Unicode superscript translation, quality sorting, and live EPG.',
     resources: ['catalog', 'meta', 'stream'], types: ['tv'], idPrefixes: ['iptv:']
 };
 
@@ -21,28 +21,40 @@ function parseXMLDate(x) {
     return new Date(`${x.substring(0,4)}-${x.substring(4,6)}-${x.substring(6,8)}T${x.substring(8,10)}:${x.substring(10,12)}:${x.substring(12,14)}${fOffset}`).getTime();
 }
 
-// Converts punctuation into spaces to cleanly catch slash-joined traits, then calculates a sorting matrix weight
+// Translates fancy Unicode superscript/subscript characters into clean standard plaintext
+function normaliseFormat(str) {
+    if (!str) return "";
+    const map = {
+        '⁰':'0','¹':'1','²':'2','³':'3','⁴':'4','⁵':'5','⁶':'6','⁷':'7','⁸':'8','⁹':'9',
+        'ᵃ':'a','ᵇ':'b','ᶜ':'c','ᵈ':'d','ᵉ':'e','ᶠ':'f','ᵍ':'g','ʰ':'h','ⁱ':'i','ʲ':'j','ᵏ':'k','ˡ':'l','ᵐ':'m','ⁿ':'n','ᵒ':'o','ᵖ':'p','ʳ':'r','ˢ':'s','ᵗ':'t','ᵘ':'u','ᵛ':'v','ʷ':'w','ˣ':'x','ʸ':'y','ᶻ':'z',
+        'ᴬ':'a','ᴮ':'b','ᶜ':'c','ᴰ':'d','ᴱ':'e','ᶠ':'f','ᴳ':'g','ᴴ':'h','ᴵ':'i','ᴶ':'j','ᴷ':'k','ᴸ':'l','ᴹ':'m','ᴺ':'n','ᴼ':'o','ᴾ':'p','ᴿ':'r','ˢ':'s','ᵀ':'t','ᵁ':'u','ⱽ':'v','ᵂ':'w',
+        '₀':'0','₁':'1','₂':'2','₃':'3','₄':'4','₅':'5','₆':'6','₇':'7','₈':'8','₉':'9',
+        'ₐ':'a','ₑ':'e','ₕ':'h','ᵢ':'i','ⱼ':'j','ₖ':'k','ₗ':'l','ₘ':'m','ₙ':'n','ₚ':'p','ₛ':'s','ₜ':'t','ᵤ':'u','ᵥ':'v','ₓ':'x'
+    };
+    return str.split('').map(c => map[c] || c).join('');
+}
+
 function parseStreamInfo(n) {
-    const cleanN = n.replace(/[\/_\-]/g, ' ');
+    const cleanN = " " + normaliseFormat(n).toLowerCase().replace(/[^a-z0-9]/g, " ") + " ";
     
     let name = "HD";
-    let score = 50;
+    let score = 50000;
     
-    if (/\b8K\b/i.test(cleanN)) { name = "8K"; score = 80; }
-    else if (/\b(4K|UHD)\b/i.test(cleanN)) { name = "4K"; score = 70; }
-    else if (/\b(FHD|1080p|1080i)\b/i.test(cleanN)) { name = "FHD"; score = 60; }
-    else if (/\b(HD|720p)\b/i.test(cleanN)) { name = "HD"; score = 50; }
-    else if (/\b(SD|576p|480p)\b/i.test(cleanN)) { name = "SD"; score = 40; }
+    if (cleanN.includes(" 8k ")) { name = "8K"; score = 80000; }
+    else if (cleanN.includes(" 4k ") || cleanN.includes(" uhd ")) { name = "4K"; score = 70000; }
+    else if (cleanN.includes(" fhd ") || cleanN.includes(" 1080p ") || cleanN.includes(" 1080i ")) { name = "FHD"; score = 60000; }
+    else if (cleanN.includes(" hd ") || cleanN.includes(" 720p ")) { name = "HD"; score = 50000; }
+    else if (cleanN.includes(" sd ") || cleanN.includes(" 576p ") || cleanN.includes(" 480p ")) { name = "SD"; score = 40000; }
     
     const e = [];
-    if (/\bVIP\b/i.test(cleanN)) { e.push("VIP"); score += 5; }
-    if (/\b(HEVC|H265)\b/i.test(cleanN)) { e.push("HEVC"); score += 4; }
-    if (/dolby/i.test(cleanN)) { e.push("Dolby Audio"); score += 3; }
-    if (/\bRAW\b/i.test(cleanN)) { e.push("RAW"); score += 6; }
-    if (/\b60fps\b/i.test(cleanN)) { e.push("60FPS"); score += 2; }
-    if (/\b50fps\b/i.test(cleanN)) { e.push("50FPS"); score += 1; }
-    if (/\b24\/7\b/i.test(cleanN)) e.push("24/7");
-    if (/\b(backup|alt)\b/i.test(cleanN)) { e.push("ALT LINK"); score -= 30; }
+    if (cleanN.includes(" raw ")) { e.push("RAW"); score += 600; }
+    if (cleanN.includes(" vip ")) { e.push("VIP"); score += 500; }
+    if (cleanN.includes(" hevc ") || cleanN.includes(" h265 ")) { e.push("HEVC"); score += 400; }
+    if (cleanN.includes(" 60fps ") || cleanN.includes(" 60 fps ")) { e.push("60FPS"); score += 300; }
+    if (cleanN.includes(" 50fps ") || cleanN.includes(" 50 fps ")) { e.push("50FPS"); score += 200; }
+    if (cleanN.includes(" dolby ") || cleanN.includes(" ac3 ") || cleanN.includes(" audio ")) { e.push("Dolby Audio"); score += 100; }
+    if (cleanN.includes(" 24 7 ")) e.push("24/7");
+    if (cleanN.includes(" backup ") || cleanN.includes(" alt ")) { e.push("ALT LINK"); score -= 25000; }
     
     return { name, title: e.length > 0 ? e.join(" • ") : "Direct Stream", score };
 }
@@ -67,15 +79,19 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
                 const logo = t.match(/tvg-logo=["']([^"']+)["']/i), grp = t.match(/group-title=["']([^"']+)["']/i);
                 const rawName = t.lastIndexOf(',') !== -1 ? t.substring(t.lastIndexOf(',') + 1).trim() : "Unknown";
                 
-                let cName = rawName.replace(/\b(HD|FHD|UHD|4K|8K|SD|RAW|HEVC|1080p|1080i|720p|60fps|50fps|H265|24\/7|VOD)\b|\(.*?\)|\s*\[.*?\]\s*/gi, ' ');
+                // Deep-clean Channel Name strings
+                let cleanNameStr = normaliseFormat(rawName);
+                let cName = cleanNameStr.replace(/\b(HD|FHD|UHD|4K|8K|SD|RAW|HEVC|1080p|1080i|720p|60fps|50fps|H265|24\/7|VOD)\b|\(.*?\)|\s*\[.*?\]\s*/gi, ' ');
                 cName = cName.replace(/^(?:VIP|UK|US|CA|AU|NZ|IE|ZA|FR|DE|IT|ES|PT|NL|BE|PREMIUM|LOCAL|LIVE)\s*[-:|_\/\|\s]+\s*/gi, ' ');
                 cName = cName.replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
                 const cId = cName.replace(/[^a-z0-9]/g, "") || "unknown";
                 
+                // Convert and translate group categories before processing deduplication
                 let rawGrp = grp ? grp[1].trim() : 'Uncategorized';
-                let cleanGrp = rawGrp.replace(/\b(HD|FHD|UHD|4K|8K|SD|RAW|HEVC|1080p|1080i|720p|H265|LIVE|VOD|VIP|60FPS|50FPS|DOLBY|AUDIO|FPS)\b/gi, ' ');
+                let normGrp = normaliseFormat(rawGrp);
+                let cleanGrp = normGrp.replace(/\b(HD|FHD|UHD|4K|8K|SD|RAW|HEVC|1080p|1080i|720p|H265|LIVE|VOD|VIP|60FPS|50FPS|DOLBY|AUDIO|FPS)\b/gi, ' ');
                 cleanGrp = cleanGrp.replace(/[-\/|:_\s]+/g, ' ').replace(/\s+/g, ' ').trim();
-                if (!cleanGrp || cleanGrp.length < 2) cleanGrp = rawGrp;
+                if (!cleanGrp || cleanGrp.length < 2) cleanGrp = normGrp.replace(/[^a-zA-Z0-9 ]/g, '').trim() || rawGrp;
                 
                 if (tvgId) epgMap.set(tvgId[1].toLowerCase().trim(), cId);
                 if (tvgName) epgMap.set(tvgName[1].toLowerCase().trim(), cId);
@@ -200,7 +216,6 @@ app.get(['/:config/stream/:type/:id.json', '/:config/stream/:type/:id/:extra.jso
     res.setHeader('Access-Control-Allow-Origin', '*');
     const { config, type, id } = req.params; const chKey = id.replace('iptv:', ''); const ud = userCaches.get(config);
     if (type === 'tv' && ud && ud.status === 'ready' && ud.channelMap.has(chKey)) {
-        // Sorts streams descending based on calculated performance metric score, then hides score property from final response
         const sortedStreams = [...ud.channelMap.get(chKey).streams]
             .sort((a, b) => b.score - a.score)
             .map(({ score, ...cleanStream }) => cleanStream);
