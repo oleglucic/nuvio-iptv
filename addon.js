@@ -1,106 +1,108 @@
 const { addonBuilder } = require('stremio-addon-sdk');
 const express = require('express');
 const axios = require('axios');
-const { parse: parseM3U } = require('iptv-playlist-parser');
-const epgParser = require('epg-parser');
+const readline = require('readline');
 
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Global Cache to hold parsed data for different users securely
-// Key: Base64 config string -> Value: { channelMap, catalogItems, epgData, isLoaded }
 const userCaches = new Map();
 
 const manifestTemplate = {
     id: 'community.nuvio.groupediptv',
-    version: '2.0.0',
-    name: 'Grouped IPTV (Instant)',
-    description: 'Smart IPTV quality grouping with dynamic background fetching.',
+    version: '2.1.0',
+    name: 'Grouped IPTV (Ultra-Light)',
+    description: 'Stream-optimized IPTV quality grouping with zero-memory footprint.',
     resources: ['catalog', 'meta', 'stream'],
     types: ['tv'],
     catalogs: [{ type: 'tv', id: 'grouped_channels', name: 'Live IPTV' }]
 };
 
-// Background Processing Engine (Memory Optimized)
-async function asynchronousFetch(configKey, m3uUrl, epgUrl) {
+// Stream-based line-by-line parser (Uses almost 0MB of RAM)
+async function streamFetchIPTV(configKey, m3uUrl) {
     if (userCaches.has(configKey) && userCaches.get(configKey).status === 'loading') return;
 
     userCaches.set(configKey, {
         status: 'loading',
         channelMap: new Map(),
-        catalogItems: [],
-        epgData: {}
+        catalogItems: []
     });
 
     try {
-        console.log(`[Background] Starting memory-optimized sync for ${configKey.substring(0, 10)}...`);
+        console.log(`[Stream] Starting line-by-line parsing for config: ${configKey.substring(0, 10)}`);
         
-        // 1. Fetch & Parse M3U
-        const m3uRes = await axios.get(m3uUrl, { timeout: 30000 });
-        const playlist = parseM3U(m3uRes.data);
-        
-        const tempMap = new Map();
-        const tempCatalog = [];
-
-        playlist.items.forEach(item => {
-            // MEMORY SAVER: Skip Video-On-Demand (Movies/Series) based on common file extensions
-            if (item.url.match(/\.(mp4|mkv|avi)$/i) || item.url.includes('/movie/') || item.url.includes('/series/')) {
-                return; 
-            }
-
-            const regexFilter = /\s*(\[.*?\]|\(.*?\)|HD|FHD|UHD|4K|SD|RAW|HEVC|1080p|720p)\s*/gi;
-            const coreName = item.name.replace(regexFilter, '').trim().toLowerCase();
-            const channelId = item.tvg.id || coreName.replace(/[^a-z0-9]/g, "");
-            const streamTitle = item.name || "Standard Quality";
-
-            if (!tempMap.has(channelId)) {
-                const metaItem = {
-                    id: `iptv:${channelId}`,
-                    type: 'tv',
-                    name: coreName.replace(/\b\w/g, char => char.toUpperCase()), 
-                    poster: item.tvg.logo || '',
-                    background: item.tvg.logo || '',
-                    description: `Synchronizing live schedule guide...`,
-                    genres: [item.group.title || 'Live TV']
-                };
-                tempMap.set(channelId, { meta: metaItem, streams: [] });
-                tempCatalog.push(metaItem);
-            }
-            tempMap.get(channelId).streams.push({ title: streamTitle, url: item.url });
+        const response = await axios({
+            method: 'get',
+            url: m3uUrl,
+            responseType: 'stream',
+            timeout: 60000
         });
 
-        // Clear raw M3U string from memory immediately
-        m3uRes.data = null; 
+        const rl = readline.createInterface({
+            input: response.data,
+            crlfDelay: Infinity
+        });
 
-        // 2. Fetch & Parse EPG
-        let tempEpg = {};
-        if (epgUrl) {
-            try {
-                const epgRes = await axios.get(epgUrl, { timeout: 45000 });
-                const parsedEpg = epgParser.parse(epgRes.data);
+        const tempMap = new Map();
+        const tempCatalog = [];
+        let currentItem = null;
+
+        for await (const line of rl) {
+            const trimmed = line.trim();
+
+            if (trimmed.startsWith('#EXTINF:')) {
+                // MEMORY SAVER: Skip VOD content immediately without processing attributes
+                if (trimmed.includes('.mp4') || trimmed.includes('.mkv') || trimmed.includes('/movie/') || trimmed.includes('/series/')) {
+                    currentItem = null;
+                    continue;
+                }
+
+                // Extract attributes using fast regex matching
+                const tvgIdMatch = trimmed.match(/tvg-id="([^"]+)"/i);
+                const logoMatch = trimmed.match(/tvg-logo="([^"]+)"/i);
+                const groupMatch = trimmed.match(/group-title="([^"]+)"/i);
                 
-                parsedEpg.programs.forEach(p => {
-                    // MEMORY SAVER: Only keep EPG data if the channel actually exists in our filtered list
-                    if (tempMap.has(p.channel)) {
-                        if (!tempEpg[p.channel]) tempEpg[p.channel] = [];
-                        
-                        // Strip out unnecessary heavy metadata (like cast lists) and only keep the basics
-                        tempEpg[p.channel].push({
-                            start: p.start,
-                            stop: p.stop,
-                            title: p.title,
-                            desc: p.desc
-                        });
-                    }
+                // Get display name (everything after the last comma)
+                const commaIndex = trimmed.lastIndexOf(',');
+                const rawName = commaIndex !== -1 ? trimmed.substring(commaIndex + 1).trim() : "Unknown Channel";
+
+                // Normalize name using regex to strip quality tags
+                const regexFilter = /\s*(\[.*?\]|\(.*?\)|HD|FHD|UHD|4K|SD|RAW|HEVC|1080p|720p)\s*/gi;
+                const coreName = rawName.replace(regexFilter, '').trim().toLowerCase();
+                const channelId = (tvgIdMatch ? tvgIdMatch[1] : coreName.replace(/[^a-z0-9]/g, "")) || "unknown";
+
+                currentItem = {
+                    channelId,
+                    coreName: rawName.replace(regexFilter, '').trim(),
+                    streamTitle: rawName,
+                    logo: logoMatch ? logoMatch[1] : '',
+                    group: groupMatch ? groupMatch[1] : 'Live TV'
+                };
+            } else if (trimmed.startsWith('http') && currentItem) {
+                // Found the stream URL line right after an EXTINF line
+                const { channelId, coreName, streamTitle, logo, group } = currentItem;
+
+                if (!tempMap.has(channelId)) {
+                    const metaItem = {
+                        id: `iptv:${channelId}`,
+                        type: 'tv',
+                        name: coreName.replace(/\b\w/g, char => char.toUpperCase()),
+                        poster: logo,
+                        background: logo,
+                        description: `Custom grouped channel stream list.`,
+                        genres: [group]
+                    };
+                    tempMap.set(channelId, { meta: metaItem, streams: [] });
+                    tempCatalog.push(metaItem);
+                }
+
+                tempMap.get(channelId).streams.push({
+                    title: streamTitle,
+                    url: trimmed
                 });
-                
-                // Clear raw EPG data from memory immediately
-                epgRes.data = null;
-                parsedEpg.programs = null;
 
-            } catch (epgErr) {
-                console.error(`[Background] EPG download failed:`, epgErr.message);
+                currentItem = null; // Reset for next item
             }
         }
 
@@ -108,111 +110,73 @@ async function asynchronousFetch(configKey, m3uUrl, epgUrl) {
             status: 'ready',
             channelMap: tempMap,
             catalogItems: tempCatalog,
-            epgData: tempEpg,
             lastUpdated: Date.now()
         });
-        console.log(`[Background] Sync complete. Grouped into ${tempCatalog.length} channels.`);
+
+        console.log(`[Stream] Complete! Successfully compressed into ${tempCatalog.length} distinct channels.`);
 
     } catch (err) {
         userCaches.set(configKey, { status: 'error', message: err.message });
-        console.error(`[Background] Critical Sync Error:`, err.message);
+        console.error(`[Stream] Critical Failure:`, err.message);
     }
 }
 
-// Helper to decode Base64 URL configurationsafely
-function decodeConfig(configParam) {
-    try {
-        const decoded = Buffer.from(configParam, 'base64').toString('utf-8');
-        return JSON.parse(decoded);
-    } catch (e) {
-        return null;
-    }
-}
+// --- PROTOCOL ROUTING ---
 
-// --- STREMIO / NUVIO PROTOCOL ROUTING ---
-
-// Dynamic Manifest Delivery (Instant Response)
 app.get('/:config/manifest.json', (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Headers', '*');
     
-    const configData = decodeConfig(req.params.config);
-    if (!configData || !configData.m3u) {
-        return res.status(400).json({ error: "Invalid configuration string" });
+    const decodedBuffer = Buffer.from(req.params.config, 'base64').toString('utf-8');
+    try {
+        const configData = JSON.parse(decodedBuffer);
+        if (!configData.m3u) return res.status(400).json({ error: "Missing M3U URL" });
+        
+        // Execute stream compilation instantly in background
+        streamFetchIPTV(req.params.config, configData.m3u);
+        
+        res.json(JSON.parse(JSON.stringify(manifestTemplate)));
+    } catch(e) {
+        res.status(400).json({ error: "Invalid configuration profile" });
     }
-
-    // Trigger background loading immediately upon installation check, completely unblocking the UI response
-    asynchronousFetch(req.params.config, configData.m3u, configData.epg);
-
-    // Deep copy template manifest and attach specific configuration to it
-    const instanceManifest = JSON.parse(JSON.stringify(manifestTemplate));
-    res.json(instanceManifest);
 });
 
-// Dynamic Catalog Endpoint
 app.get('/:config/catalog/:type/:id.json', (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    const { config, type, id } = req.params;
-    
-    const userData = userCaches.get(config);
-    if (type === 'tv' && id === 'grouped_channels' && userData && userData.status === 'ready') {
+    const userData = userCaches.get(req.params.config);
+    if (req.params.type === 'tv' && req.params.id === 'grouped_channels' && userData && userData.status === 'ready') {
         return res.json({ catalogs: userData.catalogItems });
     }
-    
-    // If the server is still parsing in background, return temporary empty state gracefully
     return res.json({ catalogs: [] });
 });
 
-// Dynamic Meta (EPG Details) Endpoint
 app.get('/:config/meta/:type/:id.json', (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     const { config, type, id } = req.params;
     const channelKey = id.replace('iptv:', '');
-    
     const userData = userCaches.get(config);
+    
     if (type === 'tv' && userData && userData.status === 'ready' && userData.channelMap.has(channelKey)) {
-        let metaResponse = JSON.parse(JSON.stringify(userData.channelMap.get(channelKey).meta));
-        const now = new Date();
-        const channelSchedule = userData.epgData[channelKey];
-        
-        if (channelSchedule) {
-            const currentProgram = channelSchedule.find(p => new Date(p.start) <= now && new Date(p.stop) >= now);
-            const nextProgram = channelSchedule.find(p => new Date(p.start) > now);
-            let epgText = "";
-            if (currentProgram) {
-                const startTime = new Date(currentProgram.start).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-                const stopTime = new Date(currentProgram.stop).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-                epgText += `🟢 NOW PLAYING (${startTime} - ${stopTime})\n${currentProgram.title[0].value}\n${currentProgram.desc ? currentProgram.desc[0].value : ''}\n\n`;
-            }
-            if (nextProgram) {
-                const nextStartTime = new Date(nextProgram.start).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-                epgText += `⏭️ UP NEXT (${nextStartTime})\n${nextProgram.title[0].value}`;
-            }
-            if (epgText) metaResponse.description = epgText;
-        } else {
-            metaResponse.description = "No live TV guide metadata mapped for this channel.";
-        }
-        return res.json({ meta: metaResponse });
+        return res.json({ meta: userData.channelMap.get(channelKey).meta });
     }
     return res.json({ meta: null });
 });
 
-// Dynamic Stream Endpoint
 app.get('/:config/stream/:type/:id.json', (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     const { config, type, id } = req.params;
     const channelKey = id.replace('iptv:', '');
-    
     const userData = userCaches.get(config);
+    
     if (type === 'tv' && userData && userData.status === 'ready' && userData.channelMap.has(channelKey)) {
         return res.json({ streams: userData.channelMap.get(channelKey).streams });
     }
     return res.json({ streams: [] });
 });
 
-// --- CLIENT-SIDE FRONTEND CONFIGURATION DASHBOARD ---
+// --- DASHBOARD UI ---
 app.get('/', (req, res) => {
-    const html = `
+    res.send(`
     <!DOCTYPE html>
     <html>
     <head>
@@ -223,56 +187,34 @@ app.get('/', (req, res) => {
     </head>
     <body class="flex items-center justify-center min-h-screen p-4">
         <div class="bg-slate-800 p-8 rounded-2xl shadow-xl w-full max-w-lg border border-slate-700">
-            <h1 class="text-2xl font-bold text-indigo-400 mb-2">📺 Instant IPTV Grouper</h1>
-            <p class="text-slate-400 text-sm mb-6">Paste your links. An installation string will generate in real time without making you wait.</p>
+            <h1 class="text-2xl font-bold text-indigo-400 mb-2">📺 Stream-Optimized IPTV</h1>
+            <p class="text-slate-400 text-sm mb-6">Built to bypass low-memory cloud limitations using line-by-line streaming architecture.</p>
             
-            <div class="space-y-4">
-                <div>
-                    <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">M3U Playlist URL</label>
-                    <input type="url" id="m3uInput" oninput="generateLink()" placeholder="https://itv.m3u4u.com/..." class="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-sm focus:outline-none focus:border-indigo-500 text-slate-200">
-                </div>
-                <div>
-                    <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">XMLTV EPG URL (Optional)</label>
-                    <input type="url" id="epgInput" oninput="generateLink()" placeholder="https://epg.m3u4u.com/..." class="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-sm focus:outline-none focus:border-indigo-500 text-slate-200">
-                </div>
+            <div>
+                <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">m3u4u Playlist URL</label>
+                <input type="url" id="m3uInput" oninput="generateLink()" placeholder="https://itv.m3u4u.com/..." class="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-sm focus:outline-none focus:border-indigo-500 text-slate-200">
             </div>
 
             <div id="installSection" class="hidden mt-6 pt-6 border-t border-slate-700 space-y-3">
-                <span class="block text-xs font-semibold text-emerald-400 uppercase tracking-wider">✨ Addon Ready Instantly</span>
                 <a id="installBtn" href="#" class="block text-center bg-emerald-600 hover:bg-emerald-500 text-sm font-medium py-3 rounded-lg transition shadow-md w-full">Install Addon to Nuvio</a>
-                <p class="text-[11px] text-slate-500 text-center">If installing on a different device, your custom manifest URL is below:</p>
-                <input type="text" id="manifestUrlBox" readonly onclick="this.select()" class="w-full bg-slate-900 border border-slate-700 text-[11px] font-mono p-2 rounded text-slate-400 select-all text-center focus:outline-none">
+                <input type="text" id="manifestUrlBox" readonly onclick="this.select()" class="w-full bg-slate-900 border border-slate-700 text-[11px] font-mono p-2 rounded text-slate-400 text-center focus:outline-none">
             </div>
         </div>
-
         <script>
             function generateLink() {
                 const m3u = document.getElementById('m3uInput').value.trim();
-                const epg = document.getElementById('epgInput').value.trim();
                 const installSection = document.getElementById('installSection');
-                
-                if (!m3u) {
-                    installSection.classList.add('hidden');
-                    return;
-                }
-
-                // Create JSON object configuration and convert straight to base64
-                const configObj = { m3u: m3u, epg: epg };
-                const b64 = btoa(JSON.stringify(configObj));
-                
-                const hostUrl = window.location.host;
-                const manifestUrl = window.location.protocol + '//' + hostUrl + '/' + b64 + '/manifest.json';
-                const stremioUrl = 'stremio://' + hostUrl + '/' + b64 + '/manifest.json';
-
-                document.getElementById('installBtn').href = stremioUrl;
+                if (!m3u) { installSection.classList.add('hidden'); return; }
+                const b64 = btoa(JSON.stringify({ m3u: m3u }));
+                const manifestUrl = window.location.protocol + '//' + window.location.host + '/' + b64 + '/manifest.json';
+                document.getElementById('installBtn').href = 'stremio://' + window.location.host + '/' + b64 + '/manifest.json';
                 document.getElementById('manifestUrlBox').value = manifestUrl;
                 installSection.classList.remove('hidden');
             }
         </script>
     </body>
     </html>
-    `;
-    res.send(html);
+    `);
 });
 
 app.listen(process.env.PORT || 7000);
