@@ -11,11 +11,12 @@ const userCaches = new Map();
 
 const manifestTemplate = {
     id: 'community.nuvio.groupediptv',
-    version: '2.1.1',
+    version: '2.1.2',
     name: 'Grouped IPTV (Ultra-Light)',
     description: 'Stream-optimized IPTV quality grouping with pagination.',
     resources: ['catalog', 'meta', 'stream'],
     types: ['tv'],
+    idPrefixes: ['iptv:'], // REQUIRED: Tells Nuvio we are using custom iptv: IDs
     catalogs: [{ type: 'tv', id: 'grouped_channels', name: 'Live IPTV', extra: [{ name: 'skip', isRequired: false }] }]
 };
 
@@ -128,12 +129,11 @@ app.get('/:config/manifest.json', (req, res) => {
     }
 });
 
-// Catalog polling with Pagination (skip) Support
+// FIXED: Returning 'metas' instead of 'catalogs'
 app.get(['/:config/catalog/:type/:id.json', '/:config/catalog/:type/:id/:extra.json'], async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     const { config, type, id, extra } = req.params;
     
-    // Check if Nuvio is asking for a specific page chunk
     let skip = 0;
     if (extra) {
         const skipMatch = extra.match(/skip=([0-9]+)/);
@@ -146,9 +146,8 @@ app.get(['/:config/catalog/:type/:id.json', '/:config/catalog/:type/:id/:extra.j
         
         if (userData && userData.status === 'ready') {
             if (type === 'tv' && id === 'grouped_channels') {
-                // Slice the giant array down to exactly 100 items starting at 'skip'
                 const paginatedCatalog = userData.catalogItems.slice(skip, skip + 100);
-                return res.json({ catalogs: paginatedCatalog });
+                return res.json({ metas: paginatedCatalog }); // FIXED
             }
             break; 
         }
@@ -162,10 +161,10 @@ app.get(['/:config/catalog/:type/:id.json', '/:config/catalog/:type/:id/:extra.j
     const finalCheck = userCaches.get(config);
     if (finalCheck && finalCheck.status === 'ready' && type === 'tv' && id === 'grouped_channels') {
          const paginatedCatalog = finalCheck.catalogItems.slice(skip, skip + 100);
-         return res.json({ catalogs: paginatedCatalog });
+         return res.json({ metas: paginatedCatalog }); // FIXED
     }
     
-    return res.json({ catalogs: [] });
+    return res.json({ metas: [] }); // FIXED
 });
 
 app.get(['/:config/meta/:type/:id.json', '/:config/meta/:type/:id/:extra.json'], (req, res) => {
