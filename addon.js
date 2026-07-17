@@ -36,6 +36,8 @@ async function streamFetchIPTV(configKey, m3uUrl) {
             method: 'get',
             url: m3uUrl,
             responseType: 'stream',
+            // Tricking m3u4u into thinking a browser is downloading the file
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
             timeout: 60000
         });
 
@@ -52,7 +54,7 @@ async function streamFetchIPTV(configKey, m3uUrl) {
             const trimmed = line.trim();
 
             if (trimmed.startsWith('#EXTINF:')) {
-                // MEMORY SAVER: Skip VOD content immediately without processing attributes
+                // Skip VOD content immediately without processing attributes
                 if (trimmed.includes('.mp4') || trimmed.includes('.mkv') || trimmed.includes('/movie/') || trimmed.includes('/series/')) {
                     currentItem = null;
                     continue;
@@ -141,12 +143,37 @@ app.get('/:config/manifest.json', (req, res) => {
     }
 });
 
-app.get('/:config/catalog/:type/:id.json', (req, res) => {
+// Catalog polling to prevent empty loads
+app.get('/:config/catalog/:type/:id.json', async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    const userData = userCaches.get(req.params.config);
-    if (req.params.type === 'tv' && req.params.id === 'grouped_channels' && userData && userData.status === 'ready') {
-        return res.json({ catalogs: userData.catalogItems });
+    const { config, type, id } = req.params;
+    
+    let attempts = 0;
+    while (attempts < 15) {
+        const userData = userCaches.get(config);
+        
+        if (userData && userData.status === 'ready') {
+            if (type === 'tv' && id === 'grouped_channels') {
+                return res.json({ catalogs: userData.catalogItems });
+            }
+            break; 
+        }
+        
+        if (userData && userData.status === 'error') {
+            console.error("[Catalog Check] Parser failed:", userData.message);
+            break; 
+        }
+        
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        attempts++;
     }
+    
+    // Fallback in case of long loading
+    const finalCheck = userCaches.get(config);
+    if (finalCheck && finalCheck.status === 'ready' && type === 'tv' && id === 'grouped_channels') {
+         return res.json({ catalogs: finalCheck.catalogItems });
+    }
+    
     return res.json({ catalogs: [] });
 });
 
