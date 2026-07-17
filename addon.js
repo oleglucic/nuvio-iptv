@@ -11,15 +11,15 @@ const userCaches = new Map();
 
 const manifestTemplate = {
     id: 'community.nuvio.groupediptv',
-    version: '2.1.0',
+    version: '2.1.1',
     name: 'Grouped IPTV (Ultra-Light)',
-    description: 'Stream-optimized IPTV quality grouping with zero-memory footprint.',
+    description: 'Stream-optimized IPTV quality grouping with pagination.',
     resources: ['catalog', 'meta', 'stream'],
     types: ['tv'],
-    catalogs: [{ type: 'tv', id: 'grouped_channels', name: 'Live IPTV' }]
+    catalogs: [{ type: 'tv', id: 'grouped_channels', name: 'Live IPTV', extra: [{ name: 'skip', isRequired: false }] }]
 };
 
-// Stream-based line-by-line parser (Uses almost 0MB of RAM)
+// Stream-based line-by-line parser
 async function streamFetchIPTV(configKey, m3uUrl) {
     if (userCaches.has(configKey) && userCaches.get(configKey).status === 'loading') return;
 
@@ -36,15 +36,11 @@ async function streamFetchIPTV(configKey, m3uUrl) {
             method: 'get',
             url: m3uUrl,
             responseType: 'stream',
-            // Tricking m3u4u into thinking a browser is downloading the file
             headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
             timeout: 60000
         });
 
-        const rl = readline.createInterface({
-            input: response.data,
-            crlfDelay: Infinity
-        });
+        const rl = readline.createInterface({ input: response.data, crlfDelay: Infinity });
 
         const tempMap = new Map();
         const tempCatalog = [];
@@ -54,22 +50,18 @@ async function streamFetchIPTV(configKey, m3uUrl) {
             const trimmed = line.trim();
 
             if (trimmed.startsWith('#EXTINF:')) {
-                // Skip VOD content immediately without processing attributes
                 if (trimmed.includes('.mp4') || trimmed.includes('.mkv') || trimmed.includes('/movie/') || trimmed.includes('/series/')) {
                     currentItem = null;
                     continue;
                 }
 
-                // Extract attributes using fast regex matching
                 const tvgIdMatch = trimmed.match(/tvg-id="([^"]+)"/i);
                 const logoMatch = trimmed.match(/tvg-logo="([^"]+)"/i);
                 const groupMatch = trimmed.match(/group-title="([^"]+)"/i);
                 
-                // Get display name (everything after the last comma)
                 const commaIndex = trimmed.lastIndexOf(',');
                 const rawName = commaIndex !== -1 ? trimmed.substring(commaIndex + 1).trim() : "Unknown Channel";
 
-                // Normalize name using regex to strip quality tags
                 const regexFilter = /\s*(\[.*?\]|\(.*?\)|HD|FHD|UHD|4K|SD|RAW|HEVC|1080p|720p)\s*/gi;
                 const coreName = rawName.replace(regexFilter, '').trim().toLowerCase();
                 const channelId = (tvgIdMatch ? tvgIdMatch[1] : coreName.replace(/[^a-z0-9]/g, "")) || "unknown";
@@ -82,7 +74,6 @@ async function streamFetchIPTV(configKey, m3uUrl) {
                     group: groupMatch ? groupMatch[1] : 'Live TV'
                 };
             } else if (trimmed.startsWith('http') && currentItem) {
-                // Found the stream URL line right after an EXTINF line
                 const { channelId, coreName, streamTitle, logo, group } = currentItem;
 
                 if (!tempMap.has(channelId)) {
@@ -99,12 +90,8 @@ async function streamFetchIPTV(configKey, m3uUrl) {
                     tempCatalog.push(metaItem);
                 }
 
-                tempMap.get(channelId).streams.push({
-                    title: streamTitle,
-                    url: trimmed
-                });
-
-                currentItem = null; // Reset for next item
+                tempMap.get(channelId).streams.push({ title: streamTitle, url: trimmed });
+                currentItem = null; 
             }
         }
 
@@ -134,50 +121,54 @@ app.get('/:config/manifest.json', (req, res) => {
         const configData = JSON.parse(decodedBuffer);
         if (!configData.m3u) return res.status(400).json({ error: "Missing M3U URL" });
         
-        // Execute stream compilation instantly in background
         streamFetchIPTV(req.params.config, configData.m3u);
-        
         res.json(JSON.parse(JSON.stringify(manifestTemplate)));
     } catch(e) {
         res.status(400).json({ error: "Invalid configuration profile" });
     }
 });
 
-// Catalog polling to prevent empty loads
-app.get('/:config/catalog/:type/:id.json', async (req, res) => {
+// Catalog polling with Pagination (skip) Support
+app.get(['/:config/catalog/:type/:id.json', '/:config/catalog/:type/:id/:extra.json'], async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    const { config, type, id } = req.params;
+    const { config, type, id, extra } = req.params;
     
+    // Check if Nuvio is asking for a specific page chunk
+    let skip = 0;
+    if (extra) {
+        const skipMatch = extra.match(/skip=([0-9]+)/);
+        if (skipMatch) skip = parseInt(skipMatch[1]);
+    }
+
     let attempts = 0;
     while (attempts < 15) {
         const userData = userCaches.get(config);
         
         if (userData && userData.status === 'ready') {
             if (type === 'tv' && id === 'grouped_channels') {
-                return res.json({ catalogs: userData.catalogItems });
+                // Slice the giant array down to exactly 100 items starting at 'skip'
+                const paginatedCatalog = userData.catalogItems.slice(skip, skip + 100);
+                return res.json({ catalogs: paginatedCatalog });
             }
             break; 
         }
         
-        if (userData && userData.status === 'error') {
-            console.error("[Catalog Check] Parser failed:", userData.message);
-            break; 
-        }
+        if (userData && userData.status === 'error') break; 
         
         await new Promise(resolve => setTimeout(resolve, 1000));
         attempts++;
     }
     
-    // Fallback in case of long loading
     const finalCheck = userCaches.get(config);
     if (finalCheck && finalCheck.status === 'ready' && type === 'tv' && id === 'grouped_channels') {
-         return res.json({ catalogs: finalCheck.catalogItems });
+         const paginatedCatalog = finalCheck.catalogItems.slice(skip, skip + 100);
+         return res.json({ catalogs: paginatedCatalog });
     }
     
     return res.json({ catalogs: [] });
 });
 
-app.get('/:config/meta/:type/:id.json', (req, res) => {
+app.get(['/:config/meta/:type/:id.json', '/:config/meta/:type/:id/:extra.json'], (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     const { config, type, id } = req.params;
     const channelKey = id.replace('iptv:', '');
@@ -189,7 +180,7 @@ app.get('/:config/meta/:type/:id.json', (req, res) => {
     return res.json({ meta: null });
 });
 
-app.get('/:config/stream/:type/:id.json', (req, res) => {
+app.get(['/:config/stream/:type/:id.json', '/:config/stream/:type/:id/:extra.json'], (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     const { config, type, id } = req.params;
     const channelKey = id.replace('iptv:', '');
