@@ -9,8 +9,8 @@ app.use(express.json()); app.use(express.urlencoded({ extended: true }));
 const userCaches = new Map();
 
 const manifestTemplate = {
-    id: 'community.nuvio.groupedpro', version: '4.6.0', name: 'Grouped IPTV Pro',
-    description: 'Dynamic deduplicated catalogs, Unicode superscript translation, quality sorting, and live EPG.',
+    id: 'community.nuvio.groupedpro', version: '4.7.0', name: 'Grouped IPTV Pro',
+    description: 'Dynamic deduplicated country catalogs, search, strict quality token grouping, and live EPG.',
     resources: ['catalog', 'meta', 'stream'], types: ['tv'], idPrefixes: ['iptv:']
 };
 
@@ -21,7 +21,6 @@ function parseXMLDate(x) {
     return new Date(`${x.substring(0,4)}-${x.substring(4,6)}-${x.substring(6,8)}T${x.substring(8,10)}:${x.substring(10,12)}:${x.substring(12,14)}${fOffset}`).getTime();
 }
 
-// Translates fancy Unicode superscript/subscript characters into clean standard plaintext
 function normaliseFormat(str) {
     if (!str) return "";
     const map = {
@@ -41,7 +40,7 @@ function parseStreamInfo(n) {
     let score = 50000;
     
     if (cleanN.includes(" 8k ")) { name = "8K"; score = 80000; }
-    else if (cleanN.includes(" 4k ") || cleanN.includes(" uhd ")) { name = "4K"; score = 70000; }
+    else if (cleanN.includes(" 4k ") || cleanN.includes(" uhd ") || /\s2160[pi]\s/.test(cleanN) || /\s3180[pi]\s/.test(cleanN)) { name = "4K"; score = 70000; }
     else if (cleanN.includes(" fhd ") || cleanN.includes(" 1080p ") || cleanN.includes(" 1080i ")) { name = "FHD"; score = 60000; }
     else if (cleanN.includes(" hd ") || cleanN.includes(" 720p ")) { name = "HD"; score = 50000; }
     else if (cleanN.includes(" sd ") || cleanN.includes(" 576p ") || cleanN.includes(" 480p ")) { name = "SD"; score = 40000; }
@@ -79,19 +78,26 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
                 const logo = t.match(/tvg-logo=["']([^"']+)["']/i), grp = t.match(/group-title=["']([^"']+)["']/i);
                 const rawName = t.lastIndexOf(',') !== -1 ? t.substring(t.lastIndexOf(',') + 1).trim() : "Unknown";
                 
-                // Deep-clean Channel Name strings
+                // Enhanced channel matching regex drops arbitrary quality values (like 3180p, 2160p) seamlessly
                 let cleanNameStr = normaliseFormat(rawName);
-                let cName = cleanNameStr.replace(/\b(HD|FHD|UHD|4K|8K|SD|RAW|HEVC|1080p|1080i|720p|60fps|50fps|H265|24\/7|VOD)\b|\(.*?\)|\s*\[.*?\]\s*/gi, ' ');
+                let cName = cleanNameStr.replace(/\b(HD|FHD|UHD|4K|8K|SD|RAW|HEVC|1080p|1080i|720p|60fps|50fps|H265|24\/7|VOD)\b|\b\d+[pi]\b|\b\d+\s*fps\b|\(.*?\)|\s*\[.*?\]\s*/gi, ' ');
                 cName = cName.replace(/^(?:VIP|UK|US|CA|AU|NZ|IE|ZA|FR|DE|IT|ES|PT|NL|BE|PREMIUM|LOCAL|LIVE)\s*[-:|_\/\|\s]+\s*/gi, ' ');
                 cName = cName.replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
                 const cId = cName.replace(/[^a-z0-9]/g, "") || "unknown";
                 
-                // Convert and translate group categories before processing deduplication
+                // Isolates country codes and formats clean structural catalog tags
                 let rawGrp = grp ? grp[1].trim() : 'Uncategorized';
                 let normGrp = normaliseFormat(rawGrp);
+                let countryPrefix = "";
+                const countryMatch = normGrp.match(/^(UK|US|RS|BA|CA|FR|DE|IT|ES|PT|NL|BE|AU|NZ|ZA)\b/i);
+                if (countryMatch) {
+                    countryPrefix = countryMatch[1].toUpperCase() + " | ";
+                    normGrp = normGrp.substring(countryMatch[1].length).trim();
+                }
                 let cleanGrp = normGrp.replace(/\b(HD|FHD|UHD|4K|8K|SD|RAW|HEVC|1080p|1080i|720p|H265|LIVE|VOD|VIP|60FPS|50FPS|DOLBY|AUDIO|FPS)\b/gi, ' ');
-                cleanGrp = cleanGrp.replace(/[-\/|:_\s]+/g, ' ').replace(/\s+/g, ' ').trim();
-                if (!cleanGrp || cleanGrp.length < 2) cleanGrp = normGrp.replace(/[^a-zA-Z0-9 ]/g, '').trim() || rawGrp;
+                cleanGrp = cleanGrp.replace(/[-\/|:_\s]+/g, ' ').replace(/\s+/g, ' ').trim().toUpperCase();
+                let finalGrp = countryPrefix + cleanGrp;
+                if (!cleanGrp || cleanGrp.length < 2) finalGrp = rawGrp;
                 
                 if (tvgId) epgMap.set(tvgId[1].toLowerCase().trim(), cId);
                 if (tvgName) epgMap.set(tvgName[1].toLowerCase().trim(), cId);
@@ -99,7 +105,7 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
                 epgMap.set(rawName.toLowerCase().replace(/\s+/g, ''), cId);
                 epgMap.set(cId, cId);
                 
-                cItem = { cId, cName, rawName, logo: logo ? logo[1] : '', grp: cleanGrp };
+                cItem = { cId, cName, rawName, logo: logo ? logo[1] : '', grp: finalGrp };
             } else if (t.startsWith('http') && cItem) {
                 const { cId, cName, rawName, logo, grp } = cItem;
                 const catId = `iptv_${grp.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase()}`;
@@ -171,7 +177,7 @@ app.get('/:config/manifest.json', async (req, res) => {
         const instMan = JSON.parse(JSON.stringify(manifestTemplate));
         const catalogs = [];
         if (ud && ud.status === 'ready') {
-            Array.from(ud.uniqueGroups).sort().forEach(g => catalogs.push({ type: 'tv', id: `iptv_${g.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase()}`, name: g.toUpperCase(), extra: [{ name: 'search', isRequired: false }, { name: 'skip', isRequired: false }] }));
+            Array.from(ud.uniqueGroups).sort().forEach(g => catalogs.push({ type: 'tv', id: `iptv_${g.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase()}`, name: g, extra: [{ name: 'search', isRequired: false }, { name: 'skip', isRequired: false }] }));
         }
         if (catalogs.length === 0) catalogs.push({ type: 'tv', id: 'grouped_channels', name: 'Live IPTV', extra: [{ name: 'search', isRequired: false }, { name: 'skip', isRequired: false }] });
         instMan.catalogs = catalogs; res.json(instMan);
