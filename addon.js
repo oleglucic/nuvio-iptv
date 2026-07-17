@@ -9,8 +9,8 @@ app.use(express.urlencoded({ extended: true }));
 const userCaches = new Map();
 
 const manifestTemplate = {
-    id: 'community.nuvio.groupediptv', version: '3.2.0', name: 'Grouped IPTV (Pro + EPG)',
-    description: 'Dynamic catalogs, search, strict prefix deduplication, and live EPG.',
+    id: 'community.nuvio.groupediptv', version: '3.3.0', name: 'Grouped IPTV (Pro + EPG)',
+    description: 'Dynamic catalogs, search, prefix deduplication, and bulletproof EPG.',
     resources: ['catalog', 'meta', 'stream'], types: ['tv'], idPrefixes: ['iptv:']
 };
 
@@ -40,7 +40,7 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
                 cName = cName.replace(/^(?:VIP|UK|US|CA|AU|NZ|IE|ZA|FR|DE|IT|ES|PT|NL|BE|PREMIUM|LOCAL|LIVE)\s*[-:|_\/\|\s]+\s*/gi, ' ');
                 cName = cName.replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
                 const cId = cName.replace(/[^a-z0-9]/g, "") || "unknown";
-                if (tvgId) epgMap.set(tvgId[1], cId); epgMap.set(cId, cId);
+                if (tvgId) epgMap.set(tvgId[1].toLowerCase(), cId); epgMap.set(cId, cId);
                 cItem = { cId, cName, rawName, logo: logo ? logo[1] : '', grp: grp ? grp[1].trim() : 'Uncategorized' };
             } else if (t.startsWith('http') && cItem) {
                 const { cId, cName, rawName, logo, grp } = cItem;
@@ -54,7 +54,7 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
             }
         }
         
-        const tEpg = {};
+        const tEpg = {}; let epgCount = 0;
         if (epgUrl) {
             try {
                 const epgRes = await axios({ method: 'get', url: epgUrl, responseType: 'stream', headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 60000 });
@@ -66,21 +66,24 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
                     if (inProg && line.includes('</programme>')) {
                         inProg = false; const chMatch = currP.match(/channel="([^"]+)"/);
                         if (chMatch) {
-                            const mId = epgMap.get(chMatch[1]);
+                            const mId = epgMap.get(chMatch[1].toLowerCase());
                             if (mId && tMap.has(mId)) {
                                 const startMatch = currP.match(/start="([^"]+)"/), stopMatch = currP.match(/stop="([^"]+)"/);
                                 const titleMatch = currP.match(/<title[^>]*>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?<\/title>/i), descMatch = currP.match(/<desc[^>]*>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?<\/desc>/i);
                                 if (!tEpg[mId]) tEpg[mId] = [];
                                 tEpg[mId].push({ start: parseXMLDate(startMatch ? startMatch[1] : ""), stop: parseXMLDate(stopMatch ? stopMatch[1] : ""), title: titleMatch ? titleMatch[1].trim() : "Unknown", desc: descMatch ? descMatch[1].trim() : "" });
+                                epgCount++;
                             }
                         }
                     }
                 }
+                console.log(`[Stream] EPG Guide successfully matched ${epgCount} programs to channels.`);
             } catch (e) { console.error(`EPG Error:`, e.message); }
         }
         userCaches.set(configKey, { status: 'ready', channelMap: tMap, catalogItems: tCat, uniqueGroups: groups, epgData: tEpg, lastUpdated: Date.now() });
     } catch (err) { userCaches.set(configKey, { status: 'error', message: err.message }); }
 }
+
 app.get('/:config/manifest.json', async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*'); res.setHeader('Access-Control-Allow-Headers', '*');
     try {
@@ -115,18 +118,20 @@ app.get(['/:config/catalog/:type/:id.json', '/:config/catalog/:type/:id/:extra.j
 });
 
 app.get(['/:config/meta/:type/:id.json', '/:config/meta/:type/:id/:extra.json'], (req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Origin', '*'); 
+    res.setHeader('Cache-Control', 'max-age=0, no-cache, no-store, must-revalidate');
     const { config, type, id } = req.params; const chKey = id.replace('iptv:', ''); const ud = userCaches.get(config);
     if (type === 'tv' && ud && ud.status === 'ready' && ud.channelMap.has(chKey)) {
         const { catalogId, ...sMeta } = JSON.parse(JSON.stringify(ud.channelMap.get(chKey).meta));
         const now = Date.now(), sched = ud.epgData[chKey];
-        if (sched) {
-            const cProg = sched.find(p => p.start <= now && p.stop >= now), nProg = sched.find(p => p.start > now);
+        if (sched && sched.length > 0) {
+            const fProgs = sched.filter(p => p.stop > now).sort((a,b) => a.start - b.start);
+            const cProg = fProgs[0], nProg = fProgs[1];
             let text = "";
-            if (cProg) text += `🟢 NOW PLAYING (${new Date(cProg.start).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} - ${new Date(cProg.stop).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})})\n${cProg.title}\n${cProg.desc}\n\n`;
+            if (cProg) text += `🟢 LATEST (${new Date(cProg.start).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} - ${new Date(cProg.stop).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})})\n${cProg.title}\n${cProg.desc}\n\n`;
             if (nProg) text += `⏭️ UP NEXT (${new Date(nProg.start).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})})\n${nProg.title}`;
             if (text) sMeta.description = text;
-        } else sMeta.description = "No TV guide schedule available.";
+        } else sMeta.description = "No TV guide schedule mapped for this channel.";
         return res.json({ meta: sMeta });
     }
     return res.json({ meta: null });
