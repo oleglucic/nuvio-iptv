@@ -9,8 +9,8 @@ app.use(express.json()); app.use(express.urlencoded({ extended: true }));
 const userCaches = new Map();
 
 const manifestTemplate = {
-    id: 'community.nuvio.groupedpro', version: '4.8.0', name: 'Grouped IPTV Pro',
-    description: 'Dynamic deduplicated country catalogs, search, strict quality token grouping, and live EPG.',
+    id: 'community.nuvio.groupedpro', version: '4.9.0', name: 'Grouped IPTV Pro',
+    description: 'Dynamic deduplicated country catalogs, advanced Dolby Vision/Audio parsing, sorting, and live EPG.',
     resources: ['catalog', 'meta', 'stream'], types: ['tv'], idPrefixes: ['iptv:']
 };
 
@@ -33,8 +33,10 @@ function normaliseFormat(str) {
     return str.split('').map(c => map[c] || c).join('');
 }
 
+// Seamlessly parses standard, mashed, or shorthand video and audio profiles
 function parseStreamInfo(n) {
-    const cleanN = " " + normaliseFormat(n).toLowerCase().replace(/[^a-z0-9]/g, " ") + " ";
+    const low = n.toLowerCase();
+    const cleanN = " " + normaliseFormat(low).replace(/[^a-z0-9]/g, " ") + " ";
     
     let name = "HD";
     let score = 50000;
@@ -48,10 +50,25 @@ function parseStreamInfo(n) {
     const e = [];
     if (cleanN.includes(" raw ")) { e.push("RAW"); score += 600; }
     if (cleanN.includes(" vip ")) { e.push("VIP"); score += 500; }
-    if (cleanN.includes(" hevc ") || cleanN.includes(" h265 ")) { e.push("HEVC"); score += 400; }
+    if (cleanN.includes(" hevc ") || cleanN.includes(" h265 ") || cleanN.includes(" hevc")) { e.push("HEVC"); score += 400; }
+    
+    // Dynamic Dolby Vision Extraction Matrix
+    if (/dolby\s*vision|dovi|\bdv\b/i.test(low) || cleanN.includes(" dovi ") || cleanN.includes(" dolbyvision ")) {
+        e.push("Dolby Vision");
+        score += 350;
+    }
+    
+    // Dynamic Dolby Audio & Atmos Profile Extraction Matrix
+    if (/atmos/i.test(low) || cleanN.includes(" atmos ")) {
+        e.push("Dolby Atmos");
+        score += 300;
+    } else if (/dolby\s*audio|dolby\s*digital|\bac3\b|\beac3\b|\bdd5\.1\b|\bdd\+/i.test(low) || cleanN.includes(" dolbyaudio ") || cleanN.includes(" ac3 ") || cleanN.includes(" eac3 ") || (cleanN.includes(" dolby ") && !/vision/i.test(low))) {
+        e.push("Dolby Audio");
+        score += 200;
+    }
+    
     if (cleanN.includes(" 60fps ") || cleanN.includes(" 60 fps ")) { e.push("60FPS"); score += 300; }
     if (cleanN.includes(" 50fps ") || cleanN.includes(" 50 fps ")) { e.push("50FPS"); score += 200; }
-    if (cleanN.includes(" dolby ") || cleanN.includes(" ac3 ") || cleanN.includes(" audio ")) { e.push("Dolby Audio"); score += 100; }
     if (cleanN.includes(" 24 7 ") || cleanN.includes(" 247 ")) e.push("24/7");
     if (cleanN.includes(" backup ") || cleanN.includes(" alt ")) { e.push("ALT LINK"); score -= 25000; }
     
@@ -79,14 +96,14 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
                 const rawName = t.lastIndexOf(',') !== -1 ? t.substring(t.lastIndexOf(',') + 1).trim() : "Unknown";
                 
                 let cleanNameStr = normaliseFormat(rawName);
-                let cName = cleanNameStr.replace(/\b(HD|FHD|UHD|4K|8K|SD|RAW|HEVC|1080p|1080i|720p|60fps|50fps|H265|VOD)\b/gi, ' ');
+                // Clean Channel Name (Expanded to fully wipe audio/video profile metadata tags from group grouping keys)
+                let cName = cleanNameStr.replace(/\b(HD|FHD|UHD|4K|8K|SD|RAW|HEVC|1080p|1080i|720p|60fps|50fps|H265|VOD|DOLBY|AUDIO|VISION|ATMOS|DV|DOVI|AC3|EAC3)\b/gi, ' ');
                 cName = cName.replace(/\b24\s*[\/_\-]?\s*7\b/gi, ' ');
                 cName = cName.replace(/^(?:VIP|UK|US|CA|AU|NZ|IE|ZA|FR|DE|IT|ES|PT|NL|BE|PREMIUM|LOCAL|LIVE)\s*[-:|_\/\|\s]+\s*/gi, ' ');
                 cName = cName.replace(/\b\d+[pi]\b|\b\d+\s*fps\b|\(.*?\)|\s*\[.*?\]\s*/gi, ' ');
                 cName = cName.replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
                 const cId = cName.replace(/[^a-z0-9]/g, "") || "unknown";
                 
-                // Dynamic prefix classification extracts any country code automatically
                 let rawGrp = grp ? grp[1].trim() : 'Uncategorized';
                 let normGrp = normaliseFormat(rawGrp);
                 let countryPrefix = "";
@@ -101,7 +118,7 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
                     }
                 }
                 
-                let cleanGrp = normGrp.replace(/\b(HD|FHD|UHD|4K|8K|SD|RAW|HEVC|1080p|1080i|720p|H265|LIVE|VOD|VIP|60FPS|50FPS|DOLBY|AUDIO|FPS)\b/gi, ' ');
+                let cleanGrp = normGrp.replace(/\b(HD|FHD|UHD|4K|8K|SD|RAW|HEVC|1080p|1080i|720p|H265|LIVE|VOD|VIP|60FPS|50FPS|DOLBY|AUDIO|VISION|ATMOS|DV|DOVI|AC3|EAC3|FPS)\b/gi, ' ');
                 cleanGrp = cleanGrp.replace(/[-\/|:_\s]+/g, ' ').replace(/\s+/g, ' ').trim().toUpperCase();
                 let finalGrp = countryPrefix + cleanGrp;
                 if (!cleanGrp || cleanGrp.length < 2) finalGrp = rawGrp;
