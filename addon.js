@@ -9,7 +9,7 @@ app.use(express.json()); app.use(express.urlencoded({ extended: true }));
 const userCaches = new Map();
 
 const manifestTemplate = {
-    id: 'community.nuvio.groupedpro', version: '4.7.0', name: 'Grouped IPTV Pro',
+    id: 'community.nuvio.groupedpro', version: '4.8.0', name: 'Grouped IPTV Pro',
     description: 'Dynamic deduplicated country catalogs, search, strict quality token grouping, and live EPG.',
     resources: ['catalog', 'meta', 'stream'], types: ['tv'], idPrefixes: ['iptv:']
 };
@@ -52,7 +52,7 @@ function parseStreamInfo(n) {
     if (cleanN.includes(" 60fps ") || cleanN.includes(" 60 fps ")) { e.push("60FPS"); score += 300; }
     if (cleanN.includes(" 50fps ") || cleanN.includes(" 50 fps ")) { e.push("50FPS"); score += 200; }
     if (cleanN.includes(" dolby ") || cleanN.includes(" ac3 ") || cleanN.includes(" audio ")) { e.push("Dolby Audio"); score += 100; }
-    if (cleanN.includes(" 24 7 ")) e.push("24/7");
+    if (cleanN.includes(" 24 7 ") || cleanN.includes(" 247 ")) e.push("24/7");
     if (cleanN.includes(" backup ") || cleanN.includes(" alt ")) { e.push("ALT LINK"); score -= 25000; }
     
     return { name, title: e.length > 0 ? e.join(" • ") : "Direct Stream", score };
@@ -78,22 +78,29 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
                 const logo = t.match(/tvg-logo=["']([^"']+)["']/i), grp = t.match(/group-title=["']([^"']+)["']/i);
                 const rawName = t.lastIndexOf(',') !== -1 ? t.substring(t.lastIndexOf(',') + 1).trim() : "Unknown";
                 
-                // Enhanced channel matching regex drops arbitrary quality values (like 3180p, 2160p) seamlessly
                 let cleanNameStr = normaliseFormat(rawName);
-                let cName = cleanNameStr.replace(/\b(HD|FHD|UHD|4K|8K|SD|RAW|HEVC|1080p|1080i|720p|60fps|50fps|H265|24\/7|VOD)\b|\b\d+[pi]\b|\b\d+\s*fps\b|\(.*?\)|\s*\[.*?\]\s*/gi, ' ');
+                let cName = cleanNameStr.replace(/\b(HD|FHD|UHD|4K|8K|SD|RAW|HEVC|1080p|1080i|720p|60fps|50fps|H265|VOD)\b/gi, ' ');
+                cName = cName.replace(/\b24\s*[\/_\-]?\s*7\b/gi, ' ');
                 cName = cName.replace(/^(?:VIP|UK|US|CA|AU|NZ|IE|ZA|FR|DE|IT|ES|PT|NL|BE|PREMIUM|LOCAL|LIVE)\s*[-:|_\/\|\s]+\s*/gi, ' ');
+                cName = cName.replace(/\b\d+[pi]\b|\b\d+\s*fps\b|\(.*?\)|\s*\[.*?\]\s*/gi, ' ');
                 cName = cName.replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
                 const cId = cName.replace(/[^a-z0-9]/g, "") || "unknown";
                 
-                // Isolates country codes and formats clean structural catalog tags
+                // Dynamic prefix classification extracts any country code automatically
                 let rawGrp = grp ? grp[1].trim() : 'Uncategorized';
                 let normGrp = normaliseFormat(rawGrp);
                 let countryPrefix = "";
-                const countryMatch = normGrp.match(/^(UK|US|RS|BA|CA|FR|DE|IT|ES|PT|NL|BE|AU|NZ|ZA)\b/i);
+                
+                const countryMatch = normGrp.match(/^([a-z]{2,3})\b/i);
                 if (countryMatch) {
-                    countryPrefix = countryMatch[1].toUpperCase() + " | ";
-                    normGrp = normGrp.substring(countryMatch[1].length).trim();
+                    const code = countryMatch[1].toUpperCase();
+                    const exclusions = ["ALL", "NEW", "VIP", "PPV", "RAW", "ALT", "VOD", "FHD", "UHD", "KIDS", "FOR", "THE", "TOP", "BIG", "ONE", "AND", "OUT", "NOT", "YES", "OFF"];
+                    if (!exclusions.includes(code)) {
+                        countryPrefix = code + " | ";
+                        normGrp = normGrp.substring(countryMatch[0].length).trim();
+                    }
                 }
+                
                 let cleanGrp = normGrp.replace(/\b(HD|FHD|UHD|4K|8K|SD|RAW|HEVC|1080p|1080i|720p|H265|LIVE|VOD|VIP|60FPS|50FPS|DOLBY|AUDIO|FPS)\b/gi, ' ');
                 cleanGrp = cleanGrp.replace(/[-\/|:_\s]+/g, ' ').replace(/\s+/g, ' ').trim().toUpperCase();
                 let finalGrp = countryPrefix + cleanGrp;
