@@ -1,8 +1,8 @@
-const { startAiQueue } = require('./aiCurator');
 const axios = require('axios');
 const readline = require('readline');
 const zlib = require('zlib');
 const { Readable } = require('stream');
+const { startAiQueue } = require('./aiCurator'); // AI Engine Injection
 
 const userCaches = new Map();
 
@@ -168,7 +168,14 @@ async function parseM3uData(configKey, configObj) {
         }
         
         const tEpg = await handleXmltvEpg(configObj.epg, tMap, epgMap);
+        
         userCaches.set(configKey, { status: 'ready', channelMap: tMap, logoTracker: logoTrack, catalogItems: tCat, uniqueGroups: groups, epgData: tEpg, lastUpdated: Date.now() });
+        
+        // Trigger Background AI Parsing queue if user enabled it
+        if (configObj.ai) {
+            startAiQueue(userCaches.get(configKey), configKey).catch(err => console.error("[AI Queue Error]", err));
+        }
+
     } catch(e) {
         userCaches.set(configKey, { status: 'error', message: e.message });
     }
@@ -264,6 +271,12 @@ async function parseXtreamData(configKey, configObj) {
         
         userCaches.set(configKey, { status: 'ready', channelMap: tMap, logoTracker: logoTrack, catalogItems: tCat, uniqueGroups: groups, epgData: tEpg, lastUpdated: Date.now() });
         console.log(`[Xtream Engine] Categorized and loaded ${tCat.length} streams inside memory.`);
+
+        // Trigger Background AI Parsing queue if user enabled it
+        if (configObj.ai) {
+            startAiQueue(userCaches.get(configKey), configKey).catch(err => console.error("[AI Queue Error]", err));
+        }
+
     } catch(e) {
         console.error("[Xtream Engine Error]", e.message);
         userCaches.set(configKey, { status: 'error', message: e.message });
