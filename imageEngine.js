@@ -26,19 +26,37 @@ async function getPremiumPoster(cId, logoUrl, fallbackName) {
             .linear(0.55, 0) // Subtle dark exposure overlay
             .toBuffer();
 
-        // Layer 2: Clean, proportion-locked crisp foreground logo
+        // Layer 2: The UX Halo Layer (Solves dark/black logo visibility via transparent radial SVG)
+        const haloSvg = `
+            <svg width="500" height="500" xmlns="http://www.w3.org/2000/svg">
+                <defs>
+                    <radialGradient id="haloGlow" cx="50%" cy="50%" r="50%">
+                        <stop offset="0%" stop-color="#ffffff" stop-opacity="0.35" />
+                        <stop offset="60%" stop-color="#ffffff" stop-opacity="0.15" />
+                        <stop offset="100%" stop-color="#ffffff" stop-opacity="0.0" />
+                    </radialGradient>
+                </defs>
+                <circle cx="250" cy="250" r="250" fill="url(#haloGlow)" />
+            </svg>
+        `;
+        const haloBuffer = Buffer.from(haloSvg);
+
+        // Layer 3: Clean, proportion-locked crisp foreground logo
         const foreground = await sharp(logoBuffer)
-            .resize(440, 440, { fit: 'inside' })
+            .resize(400, 400, { fit: 'inside' })
             .toBuffer();
 
-        // Flatten layers into a high-performance production PNG asset
+        // Flatten all layers together in chronological order
         await sharp(background)
-            .composite([{ input: foreground, gravity: 'center' }])
+            .composite([
+                { input: haloBuffer, gravity: 'center' }, // Middle Backlight Halo
+                { input: foreground, gravity: 'center' }  // Top Crisp Logo
+            ])
             .toFile(cachePath);
 
         return cachePath;
     } catch (err) {
-        // High-Contrast SVG Fallback Vector Graphic generation for dead/missing links
+        // High-Contrast Fallback Vector Graphic for dead/missing links
         const cleanName = fallbackName ? fallbackName.toUpperCase() : "LIVE TV";
         const fallbackSvg = `
             <svg width="600" height="900" xmlns="http://www.w3.org/2000/svg">
