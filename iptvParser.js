@@ -6,25 +6,32 @@ const userCaches = new Map();
 
 function parseXMLDate(x) {
     if (!x || x.length < 14) return 0;
-    const offset = x.substring(15).trim() || '+0000';
-    const fOffset = offset.length === 5 ? `${offset.substring(0,3)}:${offset.substring(3,5)}` : 'Z';
-    return new Date(`${x.substring(0,4)}-${x.substring(4,6)}-${x.substring(6,8)}T${x.substring(8,10)}:${x.substring(10,12)}:${x.substring(12,14)}${fOffset}`).getTime();
+    try {
+        const offset = x.substring(15).trim() || '+0000';
+        const fOffset = offset.length === 5 ? `${offset.substring(0,3)}:${offset.substring(3,5)}` : 'Z';
+        const isoStr = `${x.substring(0,4)}-${x.substring(4,6)}-${x.substring(6,8)}T${x.substring(8,10)}:${x.substring(10,12)}:${x.substring(12,14)}${fOffset}`;
+        const time = new Date(isoStr).getTime();
+        if (isNaN(time)) return 0;
+        return time;
+    } catch (e) {
+        return 0;
+    }
 }
 
 function normaliseFormat(str) {
     if (!str) return "";
     const map = {
-        'ᴀ':'a','ʙ':'b','ᴄ':'c','ᴅ':'d','ᴇ':'e','私':'f','ꜰ':'f','ɢ':'g','ʜ':'h','ɪ':'i','ᴊ':'j','ᴋ':'k','<b>':'','</b>':'','ʟ':'l','ᴍ':'m','ɴ':'n','ᴏ':'o','ᴘ':'p','ǫ':'q','ʀ':'r','ꜱ':'s','ᴛ':'t','ᴜ':'u','ᴠ':'v','ᴡ':'w','x':'x','ʏ':'y','ᴢ':'z',
+        'ᴀ':'a','ʙ':'b','ᴄ':'c','ᴅ':'d','ᴇ':'e','ꜰ':'f','ɢ':'g','ʜ':'h','ɪ':'i','ᴊ':'j','ᴋ':'k','ʟ':'l','ᴍ':'m','ɴ':'n','ᴏ':'o','ᴘ':'p','ǫ':'q','ʀ':'r','s':'s','ꜱ':'s','ᴛ':'t','ᴜ':'u','ᴠ':'v','ᴡ':'w','x':'x','ʏ':'y','ᴢ':'z',
         '⁰':'0','¹':'1','²':'2','³':'3','⁴':'4','⁵':'5','⁶':'6','⁷':'7','⁸':'8','⁹':'9',
         'ᵃ':'a','ᵇ':'b','ᶜ':'c','ᵈ':'d','ᵉ':'e','ᶠ':'f','ᵍ':'g','ʰ':'h','ⁱ':'i','ʲ':'j','ᵏ':'k','ˡ':'l','ᵐ':'m','ⁿ':'n','ᵒ':'o','ᵖ':'p','ʳ':'r','ˢ':'s','ᵗ':'t','ᵘ':'u','ᵛ':'v','ʷ':'w','ˣ':'x','ʸ':'y','ᶻ':'z',
         'ᴬ':'a','ᴮ':'b','ᶜ':'c','ᴰ':'d','ᴱ':'e','ᶠ':'f','ᴳ':'g','ᴴ':'h','ᴵ':'i','ᴶ':'j','ᴷ':'k','ᴸ':'l','ᴹ':'m','ᴺ':'n','ᴼ':'o','ᴾ':'p','ᴿ':'r','ˢ':'s','ᵀ':'t','ᵁ':'u','ⱽ':'v','ᵂ':'w',
         '₀':'0','₁':'1','₂':'2','₃':'3','₄':'4','₅':'5','₆':'6','₇':'7','₈':'8','₉':'9',
         'ₐ':'a','ₑ':'e','ₕ':'h','ᵢ':'i','ⱼ':'j','ₖ':'k','ₗ':'l','ₘ':'m','ₙ':'n','ₚ':'p','ₛ':'s','ₜ':'t','ᵤ':'u','ᵥ':'v','ₓ':'x',
         'ⓐ':'a','Ⓐ':'a','ａ':'a','Ａ':'a','ⓑ':'b','Ⓑ':'b','ｂ':'b','Ｂ':'b','ⓒ':'c','Ⓒ':'c','ｃ':'c','Ｃ':'c','ⓓ':'d','Ⓓ':'d','ｄ':'d','Ｄ':'d','ⓔ':'e','Ⓔ':'e','ｅ':'e','Ｅ':'e',
-        'ⓕ':'f','Ⓕ':'f','ｆ':'f','Ｆ':'f','ⓖ':'g','Ⓖ':'g','ｇ':'g','Ｇ':'g','ⓗ':'h','Ⓗ':'h','ｈ':'h','Ｈ':'h','ⓘ':'i','Ⓘ':'i','ｉ':'i','Ｉ':'i','ⓙ':'j','Ⓙ':'j','ｊ':'j','Ｊ':'j',
+        'ⓕ':'f','Ⓕ':'f','ｆ':'f','Ｆ':'f','ⓖ':'g','Ⓖ':'g','ｇ':'g','Ｇ':'g','ⓗ':'h','Ⓗ':'h','ｈ':'h','ⓘ':'i','Ⓘ':'i','ｉ':'i','Ｉ':'i','ⓙ':'j','Ⓙ':'j','ｊ':'j','Ｊ':'j',
         'ⓚ':'k','Ⓚ':'k','ｋ':'k','Ｋ':'k','ⓛ':'l','Ⓛ':'l','ｌ':'l','Ｌ':'l','ⓜ':'m','Ⓜ':'m','ｍ':'m','Ｍ':'m','ⓝ':'n','Ⓝ':'n','ｎ':'n','Ｎ':'n','ⓞ':'o','Ⓞ':'o','ｏ':'o','Ｏ':'o',
         'ⓟ':'p','Ⓟ':'p','ｐ':'p','Ｐ':'p','ⓠ':'q','Ⓠ':'q','ｑ':'q','Ｑ':'q','ⓡ':'r','Ⓡ':'r','ｒ':'r','Ｒ':'r','ⓢ':'s','Ⓢ':'s','ｓ':'s','Ｓ':'s','ⓣ':'t','Ⓣ':'t','ｔ':'t','Ｔ':'t',
-        'ⓤ':'u','Ⓤ':'u','u':'u','Ｕ':'u','ⓥ':'v','Ⓥ':'v','ｖ':'v','Ｖ':'v','ⓦ':'w','Ⓦ':'w','ｗ':'w','Ｗ':'w','ⓧ':'x','Ⓧ':'x','ｘ':'x','Ｘ':'x','ⓨ':'y','Ⓨ':'y','ｙ':'y','Ｙ':'y',
+        '<b>':'','</b>':'','ⓤ':'u','Ⓤ':'u','u':'u','Ｕ':'u','ⓥ':'v','Ⓥ':'v','ｖ':'v','Ｖ':'v','ⓦ':'w','Ⓦ':'w','ｗ':'w','Ｗ':'w','ⓧ':'x','Ⓧ':'x','ｘ':'x','Ｘ':'x','ⓨ':'y','Ⓨ':'y','ｙ':'y','Ｙ':'y',
         'ⓩ':'z','Ⓩ':'z','ｚ':'z','Ｚ':'z'
     };
     return str.split('').map(c => map[c] || c).join('');
@@ -116,6 +123,7 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
                 const countryScopeKey = countryPrefix ? countryPrefix.replace(/[^A-Z]/g, '').toLowerCase() : 'global';
                 const cId = `${countryScopeKey}_${cName.replace(/[^a-z0-9]/g, "") || "unknown"}`;
                 
+                // Track exact expected key linkages
                 if (tvgId) epgMap.set(tvgId[1].toLowerCase().trim(), cId);
                 if (tvgName) epgMap.set(tvgName[1].toLowerCase().trim(), cId);
                 epgMap.set(rawName.toLowerCase().trim(), cId);
@@ -141,7 +149,11 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
             }
         }
         
-        const tEpg = {}; let eCount = 0;
+        console.log(`[EPG Diagnostics] M3U Complete. Generated ${epgMap.size} unique lookup hooks.`);
+        const sampleHooks = Array.from(epgMap.keys()).slice(0, 4);
+        console.log(`[EPG Diagnostics] Sample valid M3U lookup hooks:`, sampleHooks);
+
+        const tEpg = {}; let eCount = 0; let totalXmlProgs = 0; let failSampleCount = 0;
         if (epgUrl) {
             try {
                 const epgRes = await axios({ method: 'get', url: epgUrl, responseType: 'stream', headers: { 'Accept-Encoding': 'gzip,deflate', 'User-Agent': 'Mozilla/5.0' }, timeout: 60000 });
@@ -153,23 +165,46 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
                 for await (const line of rlEpg) {
                     if (line.includes('<programme')) { inProg = true; currP = line; }
                     else if (inProg) { currP += "\n" + line; }
+                    
                     if (inProg && line.includes('</programme>')) {
-                        inProg = false; const chMatch = currP.match(/channel Gentile=["']([^"']+)["']/i) || currP.match(/channel=["']([^"']+)["']/i);
+                        inProg = false; totalXmlProgs++;
+                        const chMatch = currP.match(/channel=["']([^"']+)["']/i);
                         if (chMatch) {
                             const rawEpgId = chMatch[1].toLowerCase().trim();
                             const mId = epgMap.get(rawEpgId) || epgMap.get(rawEpgId.replace(/\s+/g, ''));
+                            
                             if (mId && tMap.has(mId)) {
                                 const startMatch = currP.match(/start=["']([^"']+)["']/), stopMatch = currP.match(/stop=["']([^"']+)["']/);
                                 const titleMatch = currP.match(/<title[^>]*>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/i);
                                 const descMatch = currP.match(/<desc[^>]*>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/desc>/i);
+                                
+                                const pStart = parseXMLDate(startMatch ? startMatch[1] : "");
+                                const pStop = parseXMLDate(stopMatch ? stopMatch[1] : "");
+                                
+                                if (pStart === 0 || pStop === 0) {
+                                    if (failSampleCount < 2) {
+                                        console.log(`[EPG Diagnostics] Warning: Date parser failed on timestamps: start="${startMatch?.[1]}" stop="${stopMatch?.[1]}"`);
+                                        failSampleCount++;
+                                    }
+                                }
+                                
                                 if (!tEpg[mId]) tEpg[mId] = [];
-                                tEpg[mId].push({ start: parseXMLDate(startMatch ? startMatch[1] : ""), stop: parseXMLDate(stopMatch ? stopMatch[1] : ""), title: titleMatch ? titleMatch[1].trim() : "Unknown", desc: descMatch ? descMatch[1].trim() : "" });
+                                tEpg[mId].push({ 
+                                    start: pStart, 
+                                    stop: pStop, 
+                                    title: titleMatch ? titleMatch[1].trim() : "Unknown", 
+                                    desc: descMatch ? descMatch[1].trim() : "" 
+                                });
                                 eCount++;
+                            } else {
+                                if (totalXmlProgs < 5) {
+                                    console.log(`[EPG Diagnostics] Mismatch Alert: XML channel ID "${rawEpgId}" does not exist in your M3U list layout.`);
+                                }
                             }
                         }
                     }
                 }
-                console.log(`[Stream] EPG successfully mapped ${eCount} programs!`);
+                console.log(`[EPG Diagnostics] Final Audit: Scanned ${totalXmlProgs} guide rows. Successfully bound ${eCount} items into your dynamic Stremio layout.`);
             } catch (e) { console.error(`EPG Error:`, e.message); }
         }
         userCaches.set(configKey, { status: 'ready', channelMap: tMap, logoTracker: logoTrack, catalogItems: tCat, uniqueGroups: groups, epgData: tEpg, lastUpdated: Date.now() });
@@ -180,7 +215,7 @@ function getEpgText(chKey, epgData) {
     const now = Date.now(), sched = epgData[chKey];
     if (!sched || sched.length === 0) return "No TV guide mapped.";
     const fProgs = sched.filter(p => p.stop > now).sort((a,b) => a.start - b.start);
-    if (fProgs.length === 0) return "No upcoming programs mapped.";
+    if (fProgs.length === 0) return `No upcoming programs mapped. (Total cached guide items: ${sched.length})`;
     const cP = fProgs[0], nP = fProgs[1]; let text = "";
     if (cP) text += `🟢 LATEST (${new Date(cP.start).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} - ${new Date(cP.stop).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})})\n${cP.title}\n${cP.desc}\n\n`;
     if (nP) text += `⏭️ UP NEXT (${new Date(nP.start).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})})\n${nP.title}`;
