@@ -1,3 +1,4 @@
+const { startAiQueue } = require('./aiCurator');
 const axios = require('axios');
 const readline = require('readline');
 const zlib = require('zlib');
