@@ -7,12 +7,11 @@ const app = express();
 app.use(express.json()); app.use(express.urlencoded({ extended: true }));
 
 const manifestTemplate = {
-    id: 'community.nuvio.groupedpro', version: '5.3.1', name: 'Grouped IPTV Pro',
-    description: 'Dynamic country catalogs, Premium Blurred Poster Engine, and live EPG.',
+    id: 'community.nuvio.groupedpro', version: '5.4.0', name: 'Grouped IPTV Pro',
+    description: 'Dynamic country catalogs, Premium Blurred Poster Engine, Timezone Shifter, and live EPG.',
     resources: ['catalog', 'meta', 'stream'], types: ['tv'], idPrefixes: ['iptv:']
 };
 
-// High-speed dynamic poster streaming endpoint route
 app.get('/:config/poster/:cId.png', async (req, res) => {
     const { config, cId } = req.params;
     const ud = userCaches.get(config);
@@ -58,6 +57,13 @@ app.get(['/:config/catalog/:type/:id.json', '/:config/catalog/:type/:id/:extra.j
         const skipMatch = extra.match(/skip=([0-9]+)/); if (skipMatch) skip = parseInt(skipMatch[1]);
         const searchMatch = extra.match(/search=([^&]+)/); if (searchMatch) search = decodeURIComponent(searchMatch[1]).toLowerCase();
     }
+    
+    let offset = 0;
+    try {
+        const conf = JSON.parse(Buffer.from(config, 'base64').toString('utf-8'));
+        if (conf.offset) offset = parseInt(conf.offset);
+    } catch(e) {}
+
     const ud = userCaches.get(config);
     if (!ud || ud.status !== 'ready') return res.json({ metas: [] });
     let fCat = ud.catalogItems.filter(i => i.catalogId === id);
@@ -72,7 +78,7 @@ app.get(['/:config/catalog/:type/:id.json', '/:config/catalog/:type/:id/:extra.j
             ...rest, 
             poster: customImage, 
             background: customImage, 
-            description: getEpgText(chKey, ud.epgData) 
+            description: getEpgText(chKey, ud.epgData, offset) 
         };
     });
     res.json({ metas: paged });
@@ -82,13 +88,19 @@ app.get(['/:config/meta/:type/:id.json', '/:config/meta/:type/:id/:extra.json'],
     res.setHeader('Access-Control-Allow-Origin', '*'); res.setHeader('Cache-Control', 'max-age=0, no-cache, no-store, must-revalidate');
     const { config, type, id } = req.params; const chKey = id.replace('iptv:', ''); const ud = userCaches.get(config);
     if (type === 'tv' && ud && ud.status === 'ready' && ud.channelMap.has(chKey)) {
+        let offset = 0;
+        try {
+            const conf = JSON.parse(Buffer.from(config, 'base64').toString('utf-8'));
+            if (conf.offset) offset = parseInt(conf.offset);
+        } catch(e) {}
+
         const targetMeta = ud.channelMap.get(chKey).meta || {};
         const { catalogId, ...sMeta } = JSON.parse(JSON.stringify(targetMeta));
         const rootUrl = `${req.protocol}://${req.get('host')}`;
         const customImage = `${rootUrl}/${config}/poster/${chKey}.png`;
         sMeta.poster = customImage;
         sMeta.background = customImage;
-        sMeta.description = getEpgText(chKey, ud.epgData);
+        sMeta.description = getEpgText(chKey, ud.epgData, offset);
         return res.json({ meta: sMeta });
     }
     return res.json({ meta: null });
@@ -107,7 +119,7 @@ app.get(['/:config/stream/:type/:id.json', '/:config/stream/:type/:id/:extra.jso
 });
 
 app.get('/', (req, res) => {
-    res.send(`<!DOCTYPE html><html><head><title>Nuvio IPTV Setup</title><meta name="viewport" content="width=device-width, initial-scale=1.0"><script src="https://cdn.tailwindcss.com"></script><style>body{background:#0f172a;color:#f8fafc;font-family:sans-serif;}</style></head><body class="flex items-center justify-center min-h-screen p-4"><div class="bg-slate-800 p-8 rounded-2xl shadow-xl w-full max-w-lg border border-slate-700"><h1 class="text-2xl font-bold text-indigo-400 mb-2">📺 Nuvio IPTV Pro + EPG</h1><p class="text-slate-400 text-sm mb-6">Featuring dynamic catalogs, search, prefix deduplication, and TV Guide.</p><div class="space-y-4"><div><label class="block text-xs font-semibold text-slate-400 uppercase mb-2">M3U Playlist URL</label><input type="url" id="m3uInput" oninput="generateLink()" placeholder="https://..." class="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-sm focus:outline-none text-slate-200"></div><div><label class="block text-xs font-semibold text-slate-400 uppercase mb-2">XMLTV EPG URL (Optional)</label><input type="url" id="epgInput" oninput="generateLink()" placeholder="https://..." class="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-sm focus:outline-none text-slate-200"></div></div><div id="installSection" class="hidden mt-6 pt-6 border-t border-slate-700 space-y-3"><a id="installBtn" href="#" class="block text-center bg-indigo-600 hover:bg-indigo-500 text-sm font-medium py-3 rounded-lg w-full">Install Addon to Nuvio</a><p class="text-[11px] text-slate-500 text-center">Server will build your categories on install.</p></div></div><script>function generateLink(){const m=document.getElementById('m3uInput').value.trim();const e=document.getElementById('epgInput').value.trim();const s=document.getElementById('installSection');if(!m){s.classList.add('hidden');return;}const o={m3u:m};if(e)o.epg=e;const b=btoa(JSON.stringify(o));document.getElementById('installBtn').href='stremio://'+window.location.host+'/'+b+'/manifest.json';s.classList.remove('hidden');}</script></body></html>`);
+    res.send(`<!DOCTYPE html><html><head><title>Nuvio IPTV Setup</title><meta name="viewport" content="width=device-width, initial-scale=1.0"><script src="https://cdn.tailwindcss.com"></script><style>body{background:#0f172a;color:#f8fafc;font-family:sans-serif;}</style></head><body class="flex items-center justify-center min-h-screen p-4"><div class="bg-slate-800 p-8 rounded-2xl shadow-xl w-full max-w-lg border border-slate-700"><h1 class="text-2xl font-bold text-indigo-400 mb-2">📺 Nuvio IPTV Pro + EPG</h1><p class="text-slate-400 text-sm mb-6">Featuring dynamic catalogs, search, prefix deduplication, and TV Guide.</p><div class="space-y-4"><div><label class="block text-xs font-semibold text-slate-400 uppercase mb-2">M3U Playlist URL</label><input type="url" id="m3uInput" oninput="generateLink()" placeholder="https://..." class="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-sm focus:outline-none text-slate-200"></div><div><label class="block text-xs font-semibold text-slate-400 uppercase mb-2">XMLTV EPG URL (Optional)</label><input type="url" id="epgInput" oninput="generateLink()" placeholder="https://..." class="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-sm focus:outline-none text-slate-200"></div><div><label class="block text-xs font-semibold text-slate-400 uppercase mb-2">EPG Time Offset Adjustment</label><select id="offsetInput" onchange="generateLink()" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-sm focus:outline-none text-slate-200"><option value="-5">-5 Hours (EST)</option><option value="-4">-4 Hours (EDT)</option><option value="-1">-1 Hour</option><option value="0">No Shift (UTC / GMT)</option><option value="1">+1 Hour (CET)</option><option value="2" selected>+2 Hours (CEST / European Summer Time)</option><option value="3">+3 Hours (EEST / MSK)</option><option value="4">+4 Hours</option></select></div></div><div id="installSection" class="hidden mt-6 pt-6 border-t border-slate-700 space-y-3"><a id="installBtn" href="#" class="block text-center bg-indigo-600 hover:bg-indigo-500 text-sm font-medium py-3 rounded-lg w-full">Install Addon to Nuvio</a><p class="text-[11px] text-slate-500 text-center">Server will build your categories on install.</p></div></div><script>function generateLink(){const m=document.getElementById('m3uInput').value.trim();const e=document.getElementById('epgInput').value.trim();const o=document.getElementById('offsetInput').value;const s=document.getElementById('installSection');if(!m){s.classList.add('hidden');return;}const conf={m3u:m,offset:o};if(e)conf.epg=e;const b=btoa(JSON.stringify(conf));document.getElementById('installBtn').href='stremio://'+window.location.host+'/'+b+'/manifest.json';s.classList.remove('hidden');}</script></body></html>`);
 });
 
 app.listen(process.env.PORT || 7000);
