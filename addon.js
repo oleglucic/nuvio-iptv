@@ -9,8 +9,8 @@ app.use(express.json()); app.use(express.urlencoded({ extended: true }));
 const userCaches = new Map();
 
 const manifestTemplate = {
-    id: 'community.nuvio.groupedpro', version: '5.1.0', name: 'Grouped IPTV Pro',
-    description: 'Dynamic country catalogs, strict channel name normalizer, separator line filter, and live EPG.',
+    id: 'community.nuvio.groupedpro', version: '5.2.0', name: 'Grouped IPTV Pro',
+    description: 'Country-isolated channel groups, advanced font translators, separator line filter, and live EPG.',
     resources: ['catalog', 'meta', 'stream'], types: ['tv'], idPrefixes: ['iptv:']
 };
 
@@ -21,7 +21,6 @@ function parseXMLDate(x) {
     return new Date(`${x.substring(0,4)}-${x.substring(4,6)}-${x.substring(6,8)}T${x.substring(8,10)}:${x.substring(10,12)}:${x.substring(12,14)}${fOffset}`).getTime();
 }
 
-// Fixed character dictionary maps small caps, superscripts, and subscripts cleanly
 function normaliseFormat(str) {
     if (!str) return "";
     const map = {
@@ -102,20 +101,9 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
                 const logo = t.match(/tvg-logo=["']([^"']+)["']/i), grp = t.match(/group-title=["']([^"']+)["']/i);
                 const rawName = t.lastIndexOf(',') !== -1 ? t.substring(t.lastIndexOf(',') + 1).trim() : "Unknown";
                 
-                // Drop decorative playlist separators (e.g., #######, ------, =======) instantly
                 if (/([#\-\*_=\+~]){3,}/.test(rawName) || rawName.includes('----') || rawName.includes('####')) { cItem = null; continue; }
                 
-                let cleanNameStr = normaliseFormat(rawName).toLowerCase();
-                
-                // Deep-clean channel names: Wipes quality, codecs, and structural terms (vip, live) anywhere in the string
-                let cName = cleanNameStr.replace(/\b(hd|fhd|uhd|4k|8k|sd|raw|hevc|1080p|1080i|720p|60fps|50fps|h265|vod|dolby|audio|vision|atmos|dv|dovi|ac3|eac3|fps|vip|premium|live|backup|alt|online)\b/gi, ' ');
-                cName = cName.replace(/\b24\s*[\/_\-]?\s*7\b/gi, ' ');
-                cName = cName.replace(/\b\d+[pi]\b|\b\d+\s*fps\b/gi, ' ');
-                // Wipes leading country codes (UK, US, RS, BA) dynamically from the front of the text
-                cName = cName.replace(/^[a-z]{2,3}\b\s*[-:|_\/\|\s]*/gi, ' ');
-                cName = cName.replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
-                const cId = cName.replace(/[^a-z0-9]/g, "") || "unknown";
-                
+                // 1. Process and format catalog groupings first
                 let rawGrp = grp ? grp[1].trim() : 'Uncategorized';
                 let normGrp = normaliseFormat(rawGrp).toLowerCase();
                 let countryPrefix = "";
@@ -134,6 +122,18 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
                 cleanGrp = cleanGrp.replace(/[-\/|:_\s]+/g, ' ').replace(/\s+/g, ' ').trim().toUpperCase();
                 let finalGrp = countryPrefix + cleanGrp;
                 if (!cleanGrp || cleanGrp.length < 2) finalGrp = rawGrp;
+                
+                // 2. Clear and clean display title string
+                let cleanNameStr = normaliseFormat(rawName).toLowerCase();
+                let cName = cleanNameStr.replace(/\b(hd|fhd|uhd|4k|8k|sd|raw|hevc|1080p|1080i|720p|60fps|50fps|h265|vod|dolby|audio|vision|atmos|dv|dovi|ac3|eac3|fps|vip|premium|live|backup|alt|online)\b/gi, ' ');
+                cName = cName.replace(/\b24\s*[\/_\-]?\s*7\b/gi, ' ');
+                cName = cName.replace(/\b\d+[pi]\b|\b\d+\s*fps\b/gi, ' ');
+                cName = cName.replace(/^[a-z]{2,3}\b\s*[-:|_\/\|\s]*/gi, ' ');
+                cName = cName.replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+                
+                // 3. Country ISO code namespacing logic stops cross-border duplicates merging
+                const countryScopeKey = countryPrefix ? countryPrefix.replace(/[^A-Z]/g, '').toLowerCase() : 'global';
+                const cId = `${countryScopeKey}_${cName.replace(/[^a-z0-9]/g, "") || "unknown"}`;
                 
                 if (tvgId) epgMap.set(tvgId[1].toLowerCase().trim(), cId);
                 if (tvgName) epgMap.set(tvgName[1].toLowerCase().trim(), cId);
