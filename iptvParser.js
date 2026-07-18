@@ -1,6 +1,7 @@
 const axios = require('axios');
 const readline = require('readline');
 const zlib = require('zlib');
+const { Readable } = require('stream');
 
 const userCaches = new Map();
 
@@ -21,7 +22,7 @@ function parseXMLDate(x) {
 function normaliseFormat(str) {
     if (!str) return "";
     const map = {
-        'ᴀ':'a','ʙ':'b','ᴄ':'c','ᴅ':'d','ᴇ':'e','ꜰ':'f','ɢ':'g','ʜ':'h','ɪ':'i','ᴊ':'j','ᴋ':'k','ʟ':'l','ᴍ':'m','ɴ':'n','ᴏ':'o','ᴘ':'p','ǫ':'q','ʀ':'r','s':'s','ꜱ':'s','ᴛ':'t','ᴜ':'u','ᴠ':'v','ᴡ':'w','x':'x','ʏ':'y','ᴢ':'z',
+        'ᴀ':'a','ʙ':'b','ᴄ':'c','ᴅ':'d','ᴇ':'e','ꜰ':'f','ɢ':'g','ʜ':'h','ɪ':'i','ᴊ':'j','ᴋ':'k','ʟ':'l','ᴍ':'m','ɴ':'n','ᴏ':'o','ᴘ':'p','ǫ':'q','ʀ':'r','s':'s','橫':'s','ꜱ':'s','ᴛ':'t','ᴜ':'u','ᴠ':'v','ᴡ':'w','x':'x','ʏ':'y','ᴢ':'z',
         '⁰':'0','¹':'1','²':'2','³':'3','⁴':'4','⁵':'5','⁶':'6','⁷':'7','⁸':'8','⁹':'9',
         'ᵃ':'a','ᵇ':'b','ᶜ':'c','ᵈ':'d','ᵉ':'e','ᶠ':'f','ᵍ':'g','ʰ':'h','ⁱ':'i','ʲ':'j','ᵏ':'k','ˡ':'l','ᵐ':'m','ⁿ':'n','ᵒ':'o','ᵖ':'p','ʳ':'r','ˢ':'s','ᵗ':'t','ᵘ':'u','ᵛ':'v','ʷ':'w','ˣ':'x','ʸ':'y','ᶻ':'z',
         'ᴬ':'a','ᴮ':'b','ᶜ':'c','ᴰ':'d','ᴱ':'e','ᶠ':'f','ᴳ':'g','ᴴ':'h','ᴵ':'i','ᴶ':'j','ᴷ':'k','ᴸ':'l','ᴹ':'m','ᴺ':'n','ᴼ':'o','ᴾ':'p','ᴿ':'r','ˢ':'s','ᵀ':'t','ᵁ':'u','ⱽ':'v','ᵂ':'w',
@@ -31,7 +32,7 @@ function normaliseFormat(str) {
         'ⓕ':'f','Ⓕ':'f','ｆ':'f','Ｆ':'f','ⓖ':'g','Ⓖ':'g','ｇ':'g','Ｇ':'g','ⓗ':'h','Ⓗ':'h','ｈ':'h','Ｈ':'h','ⓘ':'i','Ⓘ':'i','ｉ':'i','Ｉ':'i','ⓙ':'j','Ⓙ':'j','ｊ':'j','Ｊ':'j',
         'ⓚ':'k','Ⓚ':'k','ｋ':'k','Ｋ':'k','ⓛ':'l','Ⓛ':'l','ｌ':'l','Ｌ':'l','ⓜ':'m','Ⓜ':'m','ｍ':'m','Ｍ':'m','ⓝ':'n','Ⓝ':'n','ｎ':'n','Ｎ':'n','ⓞ':'o','Ⓞ':'o','ｏ':'o','Ｏ':'o',
         'ⓟ':'p','Ⓟ':'p','ｐ':'p','Ｐ':'p','ⓠ':'q','Ⓠ':'q','ｑ':'q','Ｑ':'q','ⓡ':'r','Ⓡ':'r','ｒ':'r','Ｒ':'r','ⓢ':'s','Ⓢ':'s','ｓ':'s','Ｓ':'s','ⓣ':'t','Ⓣ':'t','ｔ':'t','Ｔ':'t',
-        '<b>':'','</b>':'','ⓤ':'u','Ⓤ':'u','u':'u','Ｕ':'u','ⓥ':'v','Ⓥ':'v','ｖ':'v','Ｖ':'v','ⓦ':'w','Ⓦ':'w','ｗ':'w','裝':'w','ⓧ':'x','Ⓧ':'x','ｘ':'x','Ｘ':'x','ⓨ':'y','Ⓨ':'y','ｙ':'y','Ｙ':'y',
+        '<b>':'','</b>':'','ⓤ':'u','Ⓤ':'u','u':'u','Ｕ':'u','ⓥ':'v','Ⓥ':'v','ｖ':'v','Ｖ':'v','ⓦ':'w','Ⓦ':'w','ｗ':'w','Ｗ':'w','ⓧ':'x','Ⓧ':'x','ｘ':'x','Ｘ':'x','ⓨ':'y','Ⓨ':'y','ｙ':'y','Ｙ':'y',
         'ⓩ':'z','Ⓩ':'z','ｚ':'z','Ｚ':'z'
     };
     return str.split('').map(c => map[c] || c).join('');
@@ -148,35 +149,48 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
             }
         }
         
-        console.log(`[EPG Diagnostics] M3U Complete. Generated ${epgMap.size} unique lookup hooks.`);
+        console.log(`[EPG Engine] M3U Complete. Generated ${epgMap.size} lookup hooks.`);
 
-        const tEpg = {}; let eCount = 0; let totalXmlLines = 0; let totalXmlProgs = 0;
+        const tEpg = {}; let eCount = 0;
         if (epgUrl) {
             try {
                 const epgRes = await axios({ method: 'get', url: epgUrl, responseType: 'stream', headers: { 'Accept-Encoding': 'gzip,deflate', 'User-Agent': 'Mozilla/5.0' }, timeout: 60000 });
-                let eStream = epgRes.data;
-                if (epgRes.headers['content-encoding'] === 'gzip' || epgUrl.toLowerCase().endsWith('.gz')) eStream = eStream.pipe(zlib.createGunzip());
-                const rlEpg = readline.createInterface({ input: eStream, crlfDelay: Infinity });
+                let rawStream = epgRes.data;
                 
+                // Intercept the first data packet to look for a compression signature
+                const firstChunk = await new Promise((resolve) => {
+                    rawStream.once('data', (chunk) => resolve(chunk));
+                });
+
+                let finalizedStream;
+                if (firstChunk && firstChunk[0] === 0x1f && firstChunk[1] === 0x8b) {
+                    console.log(`[EPG Engine] Target signature matches GZIP format. Injecting decompression layer...`);
+                    const combined = Readable.from((async function* () {
+                        yield firstChunk;
+                        for await (const chunk of rawStream) { yield chunk; }
+                    })());
+                    finalizedStream = combined.pipe(zlib.createGunzip());
+                } else {
+                    console.log(`[EPG Engine] Document verified as standard uncompressed text formatting.`);
+                    finalizedStream = Readable.from((async function* () {
+                        if (firstChunk) yield firstChunk;
+                        for await (const chunk of rawStream) { yield chunk; }
+                    })());
+                }
+
+                const rlEpg = readline.createInterface({ input: finalizedStream, crlfDelay: Infinity });
                 let inProg = false, currP = "";
+                
                 for await (const line of rlEpg) {
-                    totalXmlLines++;
-                    
-                    // The Live Sniffer: Dumps the exact header data to check format/encodings
-                    if (totalXmlLines <= 5) {
-                        console.log(`[EPG Sniffer] Line ${totalXmlLines} Preview:`, line.trim().substring(0, 140));
-                    }
-                    
                     const lowerLine = line.toLowerCase();
                     if (lowerLine.includes('<programme')) { 
-                        inProg = true; 
-                        currP = line; 
+                        inProg = true; currP = line; 
                     } else if (inProg) { 
                         currP += "\n" + line; 
                     }
                     
                     if (inProg && lowerLine.includes('</programme>')) {
-                        inProg = false; totalXmlProgs++;
+                        inProg = false;
                         const chMatch = currP.match(/channel=["']([^"']+)["']/i);
                         if (chMatch) {
                             const rawEpgId = chMatch[1].toLowerCase().trim();
@@ -199,8 +213,8 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
                         }
                     }
                 }
-                console.log(`[EPG Diagnostics] Final Audit: Processed ${totalXmlLines} lines. Found ${totalXmlProgs} programs. Successfully bound ${eCount} items.`);
-            } catch (e) { console.error(`EPG Error:`, e.message); }
+                console.log(`[EPG Engine] Complete. Successfully mapped ${eCount} programs to channel layouts.`);
+            } catch (e) { console.error(`EPG Processing Error:`, e.message); }
         }
         userCaches.set(configKey, { status: 'ready', channelMap: tMap, logoTracker: logoTrack, catalogItems: tCat, uniqueGroups: groups, epgData: tEpg, lastUpdated: Date.now() });
     } catch (err) { userCaches.set(configKey, { status: 'error', message: err.message }); }
