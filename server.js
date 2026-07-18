@@ -7,8 +7,8 @@ const app = express();
 app.use(express.json()); app.use(express.urlencoded({ extended: true }));
 
 const manifestTemplate = {
-    id: 'community.nuvio.groupedpro', version: '5.4.0', name: 'Grouped IPTV Pro',
-    description: 'Dynamic country catalogs, Premium Blurred Poster Engine, Timezone Shifter, and live EPG.',
+    id: 'com.oleglucic.iptvo', version: '0.0.1', name: 'IPTVo',
+    description: 'Your IPTV companion with smart channel merging, catalogueing, EPG',
     resources: ['catalog', 'meta', 'stream'], types: ['tv'], idPrefixes: ['iptv:']
 };
 
