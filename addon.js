@@ -9,8 +9,8 @@ app.use(express.json()); app.use(express.urlencoded({ extended: true }));
 const userCaches = new Map();
 
 const manifestTemplate = {
-    id: 'community.nuvio.groupedpro', version: '5.0.1', name: 'Grouped IPTV Pro',
-    description: 'Dynamic country catalogs, advanced Small Caps & Superscript Dolby translator, quality sorting, and EPG.',
+    id: 'community.nuvio.groupedpro', version: '5.1.0', name: 'Grouped IPTV Pro',
+    description: 'Dynamic country catalogs, strict channel name normalizer, separator line filter, and live EPG.',
     resources: ['catalog', 'meta', 'stream'], types: ['tv'], idPrefixes: ['iptv:']
 };
 
@@ -21,10 +21,11 @@ function parseXMLDate(x) {
     return new Date(`${x.substring(0,4)}-${x.substring(4,6)}-${x.substring(6,8)}T${x.substring(8,10)}:${x.substring(10,12)}:${x.substring(12,14)}${fOffset}`).getTime();
 }
 
+// Fixed character dictionary maps small caps, superscripts, and subscripts cleanly
 function normaliseFormat(str) {
     if (!str) return "";
     const map = {
-        'ᴀ':'a','ʙ':'b','ᴄ':'c','ᴅ':'d','ᴇ':'e','├':'f','ɢ':'g','ʜ':'h','ɪ':'i','ᴊ':'j','ᴋ':'k','ʟ':'l','ᴍ':'m','ɴ':'n','ᴏ':'o','ᴘ':'p','ǫ':'q','ʀ':'r','s':'s','ꜱ':'s','ᴛ':'t','ᴜ':'u','<b>':'v','ꜱ':'s','ᴠ':'v','ᴡ':'w','x':'x','ʏ':'y','ᴢ':'z',
+        'ᴀ':'a','ʙ':'b','ᴄ':'c','ᴅ':'d','ᴇ':'e','ꜰ':'f','ɢ':'g','ʜ':'h','ɪ':'i','ᴊ':'j','ᴋ':'k','ʟ':'l','ᴍ':'m','ɴ':'n','ᴏ':'o','ᴘ':'p','ǫ':'q','ʀ':'r','ꜱ':'s','ᴛ':'t','ᴜ':'u','ᴠ':'v','ᴡ':'w','x':'x','ʏ':'y','ᴢ':'z',
         '⁰':'0','¹':'1','²':'2','³':'3','⁴':'4','⁵':'5','⁶':'6','⁷':'7','⁸':'8','⁹':'9',
         'ᵃ':'a','ᵇ':'b','ᶜ':'c','ᵈ':'d','ᵉ':'e','ᶠ':'f','ᵍ':'g','ʰ':'h','ⁱ':'i','ʲ':'j','ᵏ':'k','ˡ':'l','ᵐ':'m','ⁿ':'n','ᵒ':'o','ᵖ':'p','ʳ':'r','ˢ':'s','ᵗ':'t','ᵘ':'u','ᵛ':'v','ʷ':'w','ˣ':'x','ʸ':'y','ᶻ':'z',
         'ᴬ':'a','ᴮ':'b','ᶜ':'c','ᴰ':'d','ᴱ':'e','ᶠ':'f','ᴳ':'g','ᴴ':'h','ᴵ':'i','ᴶ':'j','ᴷ':'k','ᴸ':'l','ᴹ':'m','ᴺ':'n','ᴼ':'o','ᴾ':'p','ᴿ':'r','ˢ':'s','ᵀ':'t','ᵁ':'u','ⱽ':'v','ᵂ':'w',
@@ -34,7 +35,7 @@ function normaliseFormat(str) {
         'ⓕ':'f','Ⓕ':'f','ｆ':'f','Ｆ':'f','ⓖ':'g','Ⓖ':'g','ｇ':'g','Ｇ':'g','ⓗ':'h','Ⓗ':'h','ｈ':'h','Ｈ':'h','ⓘ':'i','Ⓘ':'i','ｉ':'i','Ｉ':'i','ⓙ':'j','Ⓙ':'j','ｊ':'j','Ｊ':'j',
         'ⓚ':'k','Ⓚ':'k','ｋ':'k','Ｋ':'k','ⓛ':'l','Ⓛ':'l','ｌ':'l','Ｌ':'l','ⓜ':'m','Ⓜ':'m','ｍ':'m','Ｍ':'m','ⓝ':'n','Ⓝ':'n','ｎ':'n','Ｎ':'n','ⓞ':'o','Ⓞ':'o','ｏ':'o','Ｏ':'o',
         'ⓟ':'p','Ⓟ':'p','ｐ':'p','Ｐ':'p','ⓠ':'q','Ⓠ':'q','ｑ':'q','Ｑ':'q','ⓡ':'r','Ⓡ':'r','ｒ':'r','Ｒ':'r','ⓢ':'s','Ⓢ':'s','ｓ':'s','Ｓ':'s','ⓣ':'t','Ⓣ':'t','ｔ':'t','Ｔ':'t',
-        'ⓤ':'u','Ⓤ':'u','u':'u','Ｕ':'u','ⓥ':'v','Ⓥ':'v','ｖ':'v','Ｖ':'v','ⓦ':'w','Ⓦ':'w','ｗ':'w','Ｗ':'w','ⓧ':'x','Ⓧ':'x','ｘ':'x','Ｘ':'x','ⓨ':'y','Ⓨ':'y','ｙ':'y','Ｙ':'y',
+        'ⓤ':'u','Ⓤ':'u','ｕ':'u','Ｕ':'u','ⓥ':'v','Ⓥ':'v','ｖ':'v','Ｖ':'v','ⓦ':'w','Ⓦ':'w','ｗ':'w','Ｗ':'w','ⓧ':'x','Ⓧ':'x','ｘ':'x','Ｘ':'x','ⓨ':'y','Ⓨ':'y','ｙ':'y','Ｙ':'y',
         'ⓩ':'z','Ⓩ':'z','ｚ':'z','Ｚ':'z'
     };
     return str.split('').map(c => map[c] || c).join('');
@@ -66,9 +67,11 @@ function parseStreamInfo(n) {
     if (norm.includes("atmos")) {
         e.push("Dolby Atmos");
         score += 300;
-    } else if (norm.includes("dolbyaudio") || norm.includes("dolby audio") || norm.includes("dolbydigital") || norm.includes("dolby digital") || cleanN.includes(" ac3 ") || cleanN.includes(" eac3 ") || cleanN.includes(" dd5 1 ") || cleanN.includes(" dd ") || (cleanN.includes(" dolby ") && !norm.includes("vision"))) {
-        e.push("Dolby Audio");
-        score += 200;
+    } else if (norm.includes("dolby") || cleanN.includes(" ac3 ") || cleanN.includes(" eac3 ") || norm.includes("dd5") || norm.includes("audio")) {
+        if (!e.includes("Dolby Vision")) {
+            e.push("Dolby Audio");
+            score += 200;
+        }
     }
     
     if (cleanN.includes(" 60fps ") || cleanN.includes(" 60 fps ")) { e.push("60FPS"); score += 300; }
@@ -99,12 +102,18 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
                 const logo = t.match(/tvg-logo=["']([^"']+)["']/i), grp = t.match(/group-title=["']([^"']+)["']/i);
                 const rawName = t.lastIndexOf(',') !== -1 ? t.substring(t.lastIndexOf(',') + 1).trim() : "Unknown";
                 
+                // Drop decorative playlist separators (e.g., #######, ------, =======) instantly
+                if (/([#\-\*_=\+~]){3,}/.test(rawName) || rawName.includes('----') || rawName.includes('####')) { cItem = null; continue; }
+                
                 let cleanNameStr = normaliseFormat(rawName).toLowerCase();
-                let cName = cleanNameStr.replace(/\b(hd|fhd|uhd|4k|8k|sd|raw|hevc|1080p|1080i|720p|60fps|50fps|h265|vod|dolby|audio|vision|atmos|dv|dovi|ac3|eac3)\b/gi, ' ');
+                
+                // Deep-clean channel names: Wipes quality, codecs, and structural terms (vip, live) anywhere in the string
+                let cName = cleanNameStr.replace(/\b(hd|fhd|uhd|4k|8k|sd|raw|hevc|1080p|1080i|720p|60fps|50fps|h265|vod|dolby|audio|vision|atmos|dv|dovi|ac3|eac3|fps|vip|premium|live|backup|alt|online)\b/gi, ' ');
                 cName = cName.replace(/\b24\s*[\/_\-]?\s*7\b/gi, ' ');
-                cName = cName.replace(/^(?:vip|uk|us|ca|au|nz|ie|za|fr|de|it|es|pt|nl|be|premium|local|live)\s*[-:|_\/\|\s]+\s*/gi, ' ');
-                cName = cName.replace(/\b\d+[pi]\b|\b\d+\s*fps\b|\(.*?\)|\s*\[.*?\]\s*/gi, ' ');
-                cName = cName.replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+                cName = cName.replace(/\b\d+[pi]\b|\b\d+\s*fps\b/gi, ' ');
+                // Wipes leading country codes (UK, US, RS, BA) dynamically from the front of the text
+                cName = cName.replace(/^[a-z]{2,3}\b\s*[-:|_\/\|\s]*/gi, ' ');
+                cName = cName.replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
                 const cId = cName.replace(/[^a-z0-9]/g, "") || "unknown";
                 
                 let rawGrp = grp ? grp[1].trim() : 'Uncategorized';
