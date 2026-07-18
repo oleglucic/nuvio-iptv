@@ -7,7 +7,7 @@ const app = express();
 app.use(express.json()); app.use(express.urlencoded({ extended: true }));
 
 const manifestTemplate = {
-    id: 'community.nuvio.groupedpro', version: '5.3.0', name: 'Grouped IPTV Pro',
+    id: 'community.nuvio.groupedpro', version: '5.3.1', name: 'Grouped IPTV Pro',
     description: 'Dynamic country catalogs, Premium Blurred Poster Engine, and live EPG.',
     resources: ['catalog', 'meta', 'stream'], types: ['tv'], idPrefixes: ['iptv:']
 };
@@ -67,7 +67,7 @@ app.get(['/:config/catalog/:type/:id.json', '/:config/catalog/:type/:id/:extra.j
     const paged = fCat.slice(skip, skip + 100).map(item => {
         const chKey = item.id.replace('iptv:', '');
         const { catalogId, ...rest } = item;
-        const customImage = `${rootUrl}/${config}/poster/${chKey].png`;
+        const customImage = `${rootUrl}/${config}/poster/${chKey}.png`;
         return { 
             ...rest, 
             poster: customImage, 
