@@ -22,7 +22,7 @@ function parseXMLDate(x) {
 function normaliseFormat(str) {
     if (!str) return "";
     const map = {
-        'ᴀ':'a','ʙ':'b','ᴄ':'c','ᴅ':'d','ᴇ':'e','ꜰ':'f','ɢ':'g','ʜ':'h','ɪ':'i','ᴊ':'j','ᴋ':'k','ʟ':'l','ᴍ':'m','ɴ':'n','ᴏ':'o','ᴘ':'p','ǫ':'q','ʀ':'r','s':'s','橫':'s','ꜱ':'s','ᴛ':'t','ᴜ':'u','ᴠ':'v','ᴡ':'w','x':'x','ʏ':'y','ᴢ':'z',
+        'ᴀ':'a','ʙ':'b','ᴄ':'c','ᴅ':'d','ᴇ':'e','法':'f','ꜰ':'f','ɢ':'g','ʜ':'h','ɪ':'i','ᴊ':'j','ᴋ':'k','ʟ':'l','ᴍ':'m','ɴ':'n','ᴏ':'o','ᴘ':'p','ǫ':'q','ʀ':'r','s':'s','ꜱ':'s','ᴛ':'t','ᴜ':'u','ᴠ':'v','ᴡ':'w','x':'x','ʏ':'y','ᴢ':'z',
         '⁰':'0','¹':'1','²':'2','³':'3','⁴':'4','⁵':'5','⁶':'6','⁷':'7','⁸':'8','⁹':'9',
         'ᵃ':'a','ᵇ':'b','ᶜ':'c','ᵈ':'d','ᵉ':'e','ᶠ':'f','ᵍ':'g','ʰ':'h','ⁱ':'i','ʲ':'j','ᵏ':'k','ˡ':'l','ᵐ':'m','ⁿ':'n','ᵒ':'o','ᵖ':'p','ʳ':'r','ˢ':'s','ᵗ':'t','ᵘ':'u','ᵛ':'v','ʷ':'w','ˣ':'x','ʸ':'y','ᶻ':'z',
         'ᴬ':'a','ᴮ':'b','ᶜ':'c','ᴰ':'d','ᴱ':'e','ᶠ':'f','ᴳ':'g','ᴴ':'h','ᴵ':'i','ᴶ':'j','ᴷ':'k','ᴸ':'l','ᴹ':'m','ᴺ':'n','ᴼ':'o','ᴾ':'p','ᴿ':'r','ˢ':'s','ᵀ':'t','ᵁ':'u','ⱽ':'v','ᵂ':'w',
@@ -157,21 +157,18 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
                 const epgRes = await axios({ method: 'get', url: epgUrl, responseType: 'stream', headers: { 'Accept-Encoding': 'gzip,deflate', 'User-Agent': 'Mozilla/5.0' }, timeout: 60000 });
                 let rawStream = epgRes.data;
                 
-                // Intercept the first data packet to look for a compression signature
                 const firstChunk = await new Promise((resolve) => {
                     rawStream.once('data', (chunk) => resolve(chunk));
                 });
 
                 let finalizedStream;
                 if (firstChunk && firstChunk[0] === 0x1f && firstChunk[1] === 0x8b) {
-                    console.log(`[EPG Engine] Target signature matches GZIP format. Injecting decompression layer...`);
                     const combined = Readable.from((async function* () {
                         yield firstChunk;
                         for await (const chunk of rawStream) { yield chunk; }
                     })());
                     finalizedStream = combined.pipe(zlib.createGunzip());
                 } else {
-                    console.log(`[EPG Engine] Document verified as standard uncompressed text formatting.`);
                     finalizedStream = Readable.from((async function* () {
                         if (firstChunk) yield firstChunk;
                         for await (const chunk of rawStream) { yield chunk; }
@@ -220,14 +217,20 @@ async function streamFetchIPTV(configKey, m3uUrl, epgUrl) {
     } catch (err) { userCaches.set(configKey, { status: 'error', message: err.message }); }
 }
 
-function getEpgText(chKey, epgData) {
+function getEpgText(chKey, epgData, offsetHours = 0) {
     const now = Date.now(), sched = epgData[chKey];
     if (!sched || sched.length === 0) return "No TV guide mapped.";
     const fProgs = sched.filter(p => p.stop > now).sort((a,b) => a.start - b.start);
     if (fProgs.length === 0) return "No upcoming programs mapped.";
     const cP = fProgs[0], nP = fProgs[1]; let text = "";
-    if (cP) text += `🟢 LATEST (${new Date(cP.start).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} - ${new Date(cP.stop).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})})\n${cP.title}\n${cP.desc}\n\n`;
-    if (nP) text += `⏭️ UP NEXT (${new Date(nP.start).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})})\n${nP.title}`;
+
+    const formatTime = (ms) => {
+        const shiftedDate = new Date(ms + (parseInt(offsetHours) * 3600000));
+        return `${String(shiftedDate.getUTCHours()).padStart(2, '0')}:${String(shiftedDate.getUTCMinutes()).padStart(2, '0')}`;
+    };
+
+    if (cP) text += `🟢 LATEST (${formatTime(cP.start)} - ${formatTime(cP.stop)})\n${cP.title}\n${cP.desc}\n\n`;
+    if (nP) text += `⏭️ UP NEXT (${formatTime(nP.start)})\n${nP.title}`;
     return text;
 }
 
