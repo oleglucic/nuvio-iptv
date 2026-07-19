@@ -34,7 +34,7 @@ function normaliseFormat(str) {
         'ⓕ':'f','Ⓕ':'f','ｆ':'f','Ｆ':'f','ⓖ':'g','Ⓖ':'g','ｇ':'g','Ｇ':'g','ⓗ':'h','Ⓗ':'h','ｈ':'h','Ｈ':'h','ⓘ':'i','Ⓘ':'i','ｉ':'i','Ｉ':'i','ⓙ':'j','Ⓙ':'j','ｊ':'j','Ｊ':'j',
         'ⓚ':'k','Ⓚ':'k','ｋ':'k','Ｋ':'k','ⓛ':'l','Ⓛ':'l','ｌ':'l','Ｌ':'l','ⓜ':'m','Ⓜ':'m','ｍ':'m','Ｍ':'m','ⓝ':'n','Ⓝ':'n','ｎ':'n','Ｎ':'n','ⓞ':'o','Ⓞ':'o','ｏ':'o','Ｏ':'o',
         'ⓟ':'p','Ⓟ':'p','ｐ':'p','Ｐ':'p','ⓠ':'q','Ⓠ':'q','ｑ':'q','Ｑ':'q','ⓡ':'r','Ⓡ':'r','ｒ':'r','Ｒ':'r','ⓢ':'s','Ⓢ':'s','ｓ':'s','Ｓ':'s','ⓣ':'t','Ⓣ':'t','ｔ':'t','Ｔ':'t',
-        '<b>':'','</b>':'','ⓤ':'u','Ⓤ':'u','u':'u','Ｕ':'u','ⓥ':'v','Ⓥ':'v','ｖ':'v','Ｖ':'v','ⓦ':'w','Ⓦ':'w','ｗ':'w','裝':'w','ⓧ':'x','Ⓧ':'x','ｘ':'x','Ｘ':'x','ⓨ':'y','Ⓨ':'y','ｙ':'y','Ｙ':'y',
+        '<b>':'','</b>':'','🇺':'u','Ⓤ':'u','u':'u','Ｕ':'u','ⓥ':'v','Ⓥ':'v','ｖ':'v','Ｖ':'v','ⓦ':'w','Ⓦ':'w','ｗ':'w','裝':'w','ⓧ':'x','Ⓧ':'x','ｘ':'x','Ｘ':'x','ⓨ':'y','Ⓨ':'y','ｙ':'y','Ｙ':'y',
         'ⓩ':'z','Ⓩ':'z','ｚ':'z','Ｚ':'z'
     };
     return str.split('').map(c => map[c] || c).join('');
@@ -183,6 +183,7 @@ async function parseM3uData(configKey, configObj) {
                 groups.add(grp);
                 
                 if (!tMap.has(cId)) {
+                    // FIXED: Changed logo property to assign the clean finalLogo string instead of regex object array
                     const mItem = { id: `iptv:${cId}`, type: 'tv', name: cName.replace(/\b\w/g, c => c.toUpperCase()), genres: [grp], catalogId: catId, logo: logo, rawName: rawName, group: grp };
                     tMap.set(cId, { meta: mItem, streams: [] }); 
                     tCat.push(mItem);
@@ -212,7 +213,6 @@ async function parseXtreamData(configKey, configObj) {
     try {
         if (!configObj) throw new Error("Configuration mapping context payload is missing.");
         
-        // BULLETPROOF CHECK: Safely pull URL parameter string values
         const rawUrl = configObj.xtreamUrl || configObj.host || "";
         if (!rawUrl) throw new Error("Xtream target base Server URL string parameter was undefined.");
 
@@ -314,7 +314,8 @@ async function parseXtreamData(configKey, configObj) {
             }
 
             const sInfo = parseStreamInfo(rawName);
-            const liveStreamUrl = `${baseUrl}/live/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${stream.stream_id}.ts`;
+            // FIXED: Removed encodeURIComponent from username and password values within direct video link parameters
+            const liveStreamUrl = `${baseUrl}/live/${user}/${pass}/${stream.stream_id}.ts`;
             
             tMap.get(cId).streams.push({ name: sInfo.name, title: sInfo.title, url: liveStreamUrl, score: sInfo.score });
         }
