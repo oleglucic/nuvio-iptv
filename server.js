@@ -30,6 +30,7 @@ app.get('/', (req, res) => {
         .scroll-box { max-height: 220px; overflow-y: auto; margin-top: 10px; border-top: 1px solid #334155; padding-top: 10px; }
         .chk-row { display: flex; align-items: center; margin: 6px 0; cursor: pointer; font-size: 13px; }
         .chk-row input { width: auto; margin-right: 10px; }
+        .setting-label { color:#818cf8; font-weight:bold; font-size:14px; display:block; text-align:left; margin: 15px 0 5px 0; }
     </style>
 </head>
 <body>
@@ -52,10 +53,16 @@ app.get('/', (req, res) => {
         <input type="text" id="m3uUrl" placeholder="Paste full .m3u / .m3u8 link here">
     </div>
 
+    <label class="setting-label">Missing Logo Behavior</label>
+    <select id="fallbackPreference">
+        <option value="custom">Generate Clean Text Posters (Recommended)</option>
+        <option value="provider">Use Provider's Raw Image (If available)</option>
+    </select>
+
     <button type="button" id="loadCatalogsBtn" onclick="fetchCatalogs()">Load Available Catalogs</button>
 
     <div id="catalogContainer">
-        <span style="color:#818cf8; font-weight:bold; font-size:14px;">Select Active Layout Catalogs</span>
+        <span class="setting-label" style="margin-top:0;">Select Active Layout Catalogs</span>
         <div style="margin: 8px 0; display:flex; gap:10px;">
             <button type="button" onclick="toggleAllCheckboxes(true)" style="padding:4px; font-size:11px; background:#334155;">All</button>
             <button type="button" onclick="toggleAllCheckboxes(false)" style="padding:4px; font-size:11px; background:#334155;">Clear</button>
@@ -134,7 +141,10 @@ app.get('/', (req, res) => {
         });
 
         const type = document.getElementById('providerType').value;
-        const configObj = { type };
+        const fallbackPref = document.getElementById('fallbackPreference').value;
+        
+        // Pass the fallback preference to the config object so iptvParser knows what to do
+        const configObj = { type, fallbackPreference: fallbackPref };
 
         if (type === 'xtream') {
             configObj.xtreamUrl = document.getElementById('xtreamUrl').value;
@@ -144,6 +154,7 @@ app.get('/', (req, res) => {
             configObj.m3uUrl = document.getElementById('m3uUrl').value;
         }
 
+        // Base64 Payload Compression
         if (allCheckboxes.length > 0) {
             if (checked.length <= totalCategoriesCount / 2) {
                 configObj.include = checked;
@@ -238,6 +249,7 @@ app.get('/:config/catalog/:type/:id.json', async (req, res) => {
     const metas = [];
 
     for (const [chKey, channel] of ud.channelMap.entries()) {
+        // If meta.logo exists (via Supabase or Provider), use it. Otherwise, point to the custom text poster generator.
         const customImage = channel.meta.logo ? channel.meta.logo : `${rootUrl}/${config}/poster/${chKey}.png?t=${ud.lastUpdated}`;
         metas.push({
             id: channel.meta.id,
@@ -246,7 +258,7 @@ app.get('/:config/catalog/:type/:id.json', async (req, res) => {
             poster: customImage,
             background: customImage,
             logo: customImage,
-            description: `Category: ${channel.meta.group}`
+            description: `Category: ${channel.meta.genres[0]}`
         });
     }
     res.json({ metas });
@@ -272,7 +284,7 @@ app.get('/:config/meta/:type/:id.json', async (req, res) => {
             poster: customImage,
             background: customImage,
             logo: customImage,
-            description: `Live Stream: ${channel.meta.rawName} via group entry [${channel.meta.group}]`
+            description: `Live Stream: ${channel.meta.name} via category [${channel.meta.genres[0]}]`
         }
     });
 });
@@ -286,12 +298,13 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
     if (!ud || !ud.channelMap.has(id)) return res.json({ streams: [] });
     const channel = ud.channelMap.get(id);
 
-    res.json({
-        streams: [{
-            title: channel.meta.name,
-            url: channel.streamUrl
-        }]
-    });
+    // FIXED BUG: Properly mapping the streams array built by iptvParser.js
+    const streamsToReturn = channel.streams.map(stream => ({
+        title: stream.title ? `${stream.name} | ${stream.title}` : stream.name,
+        url: stream.url
+    }));
+
+    res.json({ streams: streamsToReturn });
 });
 
 // Fallback Canvas Image Generator Route
