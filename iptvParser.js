@@ -2,7 +2,7 @@ const axios = require('axios');
 const readline = require('readline');
 const zlib = require('zlib');
 const { Readable } = require('stream');
-const { startAiQueue } = require('./aiCurator'); 
+const { startAiQueue, globalAiCache } = require('./aiCurator'); 
 const { upgradeChannelAssets } = require('./universalEpg'); 
 
 const userCaches = new Map();
@@ -159,6 +159,16 @@ async function parseM3uData(configKey, configObj) {
                 const baseCleanName = cName.replace(/[^a-z0-9]/g, "") || "unknown";
                 let cId = `${countryScopeKey}_${baseCleanName}`;
                 
+                // [AI ASSIST OVERRIDE - DEDUPLICATION LAYER]
+                if (globalAiCache.has(rawName)) {
+                    cId = globalAiCache.get(rawName);
+                } else {
+                    // Trigger optimization on backup paths, alternative lines, or failed structures
+                    if (rawName.toLowerCase().includes('backup') || rawName.toLowerCase().includes('alt') || baseCleanName === 'unknown') {
+                        dirtyChannels.push(rawName);
+                    }
+                }
+                
                 if (tvgId) epgMap.set(tvgId[1].toLowerCase().trim(), cId);
                 if (tvgName) epgMap.set(tvgName[1].toLowerCase().trim(), cId);
                 epgMap.set(rawName.toLowerCase().trim(), cId);
@@ -166,25 +176,27 @@ async function parseM3uData(configKey, configObj) {
                 epgMap.set(cId, cId);
                 
                 let finalLogo = logo ? logo[1] : '';
+                let isPremiumLogo = false;
 
                 const premiumAssets = await upgradeChannelAssets(rawName, configObj);
                 if (premiumAssets) {
-                    if (premiumAssets.logo) finalLogo = premiumAssets.logo; 
+                    if (premiumAssets.logo) {
+                        finalLogo = premiumAssets.logo; 
+                        isPremiumLogo = true;
+                    }
                     if (premiumAssets.id) epgMap.set(premiumAssets.id.toLowerCase(), cId); 
-                    if (premiumAssets.needsAiCuration) dirtyChannels.push(rawName);
                 }
 
                 logoTrack.set(cId, { url: finalLogo, name: cName });
-                cItem = { cId, cName, rawName, logo: finalLogo, grp: finalGrp };
+                cItem = { cId, cName, rawName, logo: finalLogo, isPremiumLogo, grp: finalGrp };
 
             } else if (t.startsWith('http') && cItem) {
-                const { cId, cName, rawName, logo, grp } = cItem;
+                const { cId, cName, rawName, logo, isPremiumLogo, grp } = cItem;
                 const catId = `iptv_${grp.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase()}`;
                 groups.add(grp);
                 
                 if (!tMap.has(cId)) {
-                    // FIXED: Changed logo property to assign the clean finalLogo string instead of regex object array
-                    const mItem = { id: `iptv:${cId}`, type: 'tv', name: cName.replace(/\b\w/g, c => c.toUpperCase()), genres: [grp], catalogId: catId, logo: logo, rawName: rawName, group: grp };
+                    const mItem = { id: `iptv:${cId}`, type: 'tv', name: cName.replace(/\b\w/g, c => c.toUpperCase()), genres: [grp], catalogId: catId, logo: logo, isPremiumLogo: isPremiumLogo, rawName: rawName, group: grp };
                     tMap.set(cId, { meta: mItem, streams: [] }); 
                     tCat.push(mItem);
                 }
@@ -289,17 +301,29 @@ async function parseXtreamData(configKey, configObj) {
             const baseCleanName = cName.replace(/[^a-z0-9]/g, "") || "unknown";
             let cId = `${countryScopeKey}_${baseCleanName}`;
 
+            // [AI ASSIST OVERRIDE - DEDUPLICATION LAYER]
+            if (globalAiCache.has(rawName)) {
+                cId = globalAiCache.get(rawName);
+            } else {
+                if (rawName.toLowerCase().includes('backup') || rawName.toLowerCase().includes('alt') || baseCleanName === 'unknown') {
+                    dirtyChannels.push(rawName);
+                }
+            }
+
             if (stream.epg_channel_id) epgMap.set(stream.epg_channel_id.toLowerCase().trim(), cId);
             epgMap.set(rawName.toLowerCase().trim(), cId);
             epgMap.set(cId, cId);
 
             let finalLogo = stream.stream_icon || '';
+            let isPremiumLogo = false;
             
             const premiumAssets = await upgradeChannelAssets(rawName, configObj);
             if (premiumAssets) {
-                if (premiumAssets.logo) finalLogo = premiumAssets.logo; 
+                if (premiumAssets.logo) {
+                    finalLogo = premiumAssets.logo; 
+                    isPremiumLogo = true;
+                }
                 if (premiumAssets.id) epgMap.set(premiumAssets.id.toLowerCase(), cId); 
-                if (premiumAssets.needsAiCuration) dirtyChannels.push(rawName);
             }
 
             logoTrack.set(cId, { url: finalLogo, name: cName });
@@ -308,13 +332,12 @@ async function parseXtreamData(configKey, configObj) {
             groups.add(finalGrp);
 
             if (!tMap.has(cId)) {
-                const mItem = { id: `iptv:${cId}`, type: 'tv', name: cName.replace(/\b\w/g, c => c.toUpperCase()), genres: [finalGrp], catalogId: catId, logo: finalLogo, rawName: rawName, group: finalGrp };
+                const mItem = { id: `iptv:${cId}`, type: 'tv', name: cName.replace(/\b\w/g, c => c.toUpperCase()), genres: [finalGrp], catalogId: catId, logo: finalLogo, isPremiumLogo: isPremiumLogo, rawName: rawName, group: finalGrp };
                 tMap.set(cId, { meta: mItem, streams: [] });
                 tCat.push(mItem);
             }
 
             const sInfo = parseStreamInfo(rawName);
-            // FIXED: Removed encodeURIComponent from username and password values within direct video link parameters
             const liveStreamUrl = `${baseUrl}/live/${user}/${pass}/${stream.stream_id}.ts`;
             
             tMap.get(cId).streams.push({ name: sInfo.name, title: sInfo.title, url: liveStreamUrl, score: sInfo.score });
