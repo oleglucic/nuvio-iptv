@@ -165,11 +165,14 @@ app.get('/', (req, res) => {
             });
 
             container.style.display = "block";
-            btn.innerText = "Catalogs Sync Complete!";
+            btn.innerText = "Load Available Catalogs";
+            btn.disabled = false;
+            return true;
         } catch (err) {
             alert("Connection Mapping Failed: " + err.message);
             btn.innerText = "Load Available Catalogs";
             btn.disabled = false;
+            return false;
         }
     }
 
@@ -177,8 +180,24 @@ app.get('/', (req, res) => {
         document.querySelectorAll('.catalog-chk').forEach(chk => chk.checked = status);
     }
 
-    function generateStremioLink() {
-        const allCheckboxes = document.querySelectorAll('.catalog-chk');
+    async function generateStremioLink() {
+        let allCheckboxes = document.querySelectorAll('.catalog-chk');
+        const installBtn = document.getElementById('installBtn');
+        
+        // FIXED: Auto-sync communication gap handler
+        if (allCheckboxes.length === 0) {
+            installBtn.innerText = "Auto-Syncing Catalogs...";
+            installBtn.disabled = true;
+            
+            const syncSuccess = await fetchCatalogs();
+            
+            installBtn.innerText = "Install Addon";
+            installBtn.disabled = false;
+            
+            if (!syncSuccess) return;
+            allCheckboxes = document.querySelectorAll('.catalog-chk');
+        }
+
         const checked = [];
         const unchecked = [];
 
@@ -276,7 +295,7 @@ function extractConfig(req) {
     }
 }
 
-// Stremio Manifest Router - FIXED: Returns instantly to completely prevent first-load timeouts
+// Stremio Manifest Router
 app.get('/:config/manifest.json', (req, res) => {
     res.json({
         id: 'org.iptvo.premium',
@@ -289,13 +308,12 @@ app.get('/:config/manifest.json', (req, res) => {
             type: 'tv',
             id: 'iptvo_live',
             name: 'IPTVo Live TV',
-            // Tells Stremio to open the dynamic genre filter sidebar menu inside this catalog screen
             extra: [{ name: 'genre', isRequired: false }]
         }]
     });
 });
 
-// Stremio Catalog Router - FIXED: Handles all processing and filtering safely with full UI loading spinners
+// Stremio Catalog Router
 app.get('/:config/catalog/:type/:id.json', async (req, res) => {
     const config = req.params.config;
     const configObj = extractConfig(req);
@@ -307,11 +325,10 @@ app.get('/:config/catalog/:type/:id.json', async (req, res) => {
     if (!ud || !ud.channelMap) return res.json({ metas: [] });
 
     const rootUrl = `${req.protocol}://${req.get('host')}`;
-    const selectedGenre = req.query.genre; // Intercepts the sidebar selection from the user
+    const selectedGenre = req.query.genre; 
     const metas = [];
 
     for (const [chKey, channel] of ud.channelMap.entries()) {
-        // Enforce genre sidebar filter routing constraints
         if (selectedGenre && channel.meta.group !== selectedGenre) continue;
 
         const engineImage = `${rootUrl}/${config}/poster/${chKey}.png?t=${ud.lastUpdated}`;
@@ -326,7 +343,7 @@ app.get('/:config/catalog/:type/:id.json', async (req, res) => {
             background: engineImage,
             logo: passedThroughLogo,
             description: epgDescription,
-            genres: [channel.meta.group] // Automatically populates the sidebar checkboxes inside Stremio
+            genres: [channel.meta.group] 
         });
     }
     res.json({ metas });
