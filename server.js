@@ -221,9 +221,29 @@ function extractConfig(req) {
 }
 
 // Stremio Manifest Router
-app.get('/:config/manifest.json', (req, res) => {
+app.get('/:config/manifest.json', async (req, res) => {
+    const config = req.params.config;
     const configObj = extractConfig(req);
     if (!configObj) return res.status(400).send("Bad Config Structure");
+
+    await streamFetchIPTV(config, configObj);
+    const ud = userCaches.get(config);
+    
+    const dynamicCatalogs = [];
+    if (ud && ud.uniqueGroups) {
+        ud.uniqueGroups.forEach(grp => {
+            const catId = `iptv_${grp.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase()}`;
+            dynamicCatalogs.push({
+                type: 'tv',
+                id: catId,
+                name: grp
+            });
+        });
+    }
+
+    if (dynamicCatalogs.length === 0) {
+        dynamicCatalogs.push({ type: 'tv', id: 'iptvo_live', name: 'IPTVo Live TV' });
+    }
 
     res.json({
         id: 'org.iptvo.premium',
@@ -232,13 +252,14 @@ app.get('/:config/manifest.json', (req, res) => {
         description: 'AI Curation Stack & Intelligent Catalog Filter Layer',
         resources: ['catalog', 'meta', 'stream'],
         types: ['tv'],
-        catalogs: [{ type: 'tv', id: 'iptvo_live', name: 'IPTVo Live TV' }]
+        catalogs: dynamicCatalogs
     });
 });
 
 // Stremio Catalog Router
 app.get('/:config/catalog/:type/:id.json', async (req, res) => {
     const config = req.params.config;
+    const catalogId = req.params.id; 
     const configObj = extractConfig(req);
     if (!configObj) return res.json({ metas: [] });
 
@@ -251,15 +272,22 @@ app.get('/:config/catalog/:type/:id.json', async (req, res) => {
     const metas = [];
 
     for (const [chKey, channel] of ud.channelMap.entries()) {
-        const customImage = channel.meta.logo ? channel.meta.logo : `${rootUrl}/${config}/poster/${chKey}.png?t=${ud.lastUpdated}`;
+        if (channel.meta.catalogId !== catalogId && catalogId !== 'iptvo_live') continue;
+
+        // FIXED: Poster and background are strictly forced to use the canvas generation engine
+        const engineImage = `${rootUrl}/${config}/poster/${chKey}.png?t=${ud.lastUpdated}`;
+        
+        // FIXED: The logo field passes the source image asset straight through (or falls back to engine text if empty)
+        const passedThroughLogo = channel.meta.logo || engineImage;
+
         metas.push({
             id: channel.meta.id,
             type: 'tv',
             name: channel.meta.name,
-            poster: customImage,
-            background: customImage,
-            logo: customImage,
-            description: `Category: ${channel.meta.genres[0]}`
+            poster: engineImage,
+            background: engineImage,
+            logo: passedThroughLogo,
+            description: `Category: ${channel.meta.group}`
         });
     }
     res.json({ metas });
@@ -270,7 +298,6 @@ app.get('/:config/meta/:type/:id.json', async (req, res) => {
     const config = req.params.config;
     let id = req.params.id;
     
-    // STRIP PREFIX: Normalize the key lookup by removing the "iptv:" prefix if sent by Stremio
     if (id.startsWith('iptv:')) id = id.substring(5);
 
     const ud = userCaches.get(config);
@@ -278,17 +305,20 @@ app.get('/:config/meta/:type/:id.json', async (req, res) => {
     const channel = ud.channelMap.get(id);
 
     const rootUrl = `${req.protocol}://${req.get('host')}`;
-    const customImage = channel.meta.logo ? channel.meta.logo : `${rootUrl}/${config}/poster/${id}.png?t=${ud.lastUpdated}`;
+    
+    // FIXED: Enforce identical asset structural separation inside details view layout card
+    const engineImage = `${rootUrl}/${config}/poster/${id}.png?t=${ud.lastUpdated}`;
+    const passedThroughLogo = channel.meta.logo || engineImage;
 
     res.json({
         meta: {
             id: channel.meta.id,
             type: 'tv',
             name: channel.meta.name,
-            poster: customImage,
-            background: customImage,
-            logo: customImage,
-            description: `Live Stream: ${channel.meta.name} via category [${channel.meta.genres[0]}]`
+            poster: engineImage,
+            background: engineImage,
+            logo: passedThroughLogo,
+            description: `Live Stream: ${channel.meta.name} via category [${channel.meta.group}]`
         }
     });
 });
@@ -298,14 +328,12 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
     const config = req.params.config;
     let id = req.params.id;
 
-    // STRIP PREFIX: Normalize the key lookup by removing the "iptv:" prefix
     if (id.startsWith('iptv:')) id = id.substring(5);
 
     const ud = userCaches.get(config);
     if (!ud || !ud.channelMap.has(id)) return res.json({ streams: [] });
     const channel = ud.channelMap.get(id);
 
-    // Map out the streams array built inside iptvParser
     const streamsToReturn = channel.streams.map(stream => ({
         title: stream.title ? `${stream.name} | ${stream.title}` : stream.name,
         url: stream.url
