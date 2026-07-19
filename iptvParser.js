@@ -87,7 +87,7 @@ async function streamFetchIPTV(configKey, configObj) {
         catalogItems: [], uniqueGroups: new Set(), epgData: {} 
     });
     
-    if (configObj.type === 'xtream') {
+    if (configObj && configObj.type === 'xtream') {
         return await parseXtreamData(configKey, configObj);
     } else {
         return await parseM3uData(configKey, configObj);
@@ -96,7 +96,10 @@ async function streamFetchIPTV(configKey, configObj) {
 
 async function parseM3uData(configKey, configObj) {
     try {
+        if (!configObj) throw new Error("Configuration context object is missing.");
         const m3uTargetUrl = configObj.m3uUrl || configObj.m3u;
+        if (!m3uTargetUrl) throw new Error("No M3U Playlist link found inside payload parameters.");
+
         const res = await axios({ method: 'get', url: m3uTargetUrl, responseType: 'stream', headers: { 'Accept-Encoding': 'gzip,deflate', 'User-Agent': 'Mozilla/5.0' }, timeout: 60000 });
         let mStream = res.data;
         if (res.headers['content-encoding'] === 'gzip' || m3uTargetUrl.toLowerCase().endsWith('.gz')) mStream = mStream.pipe(zlib.createGunzip());
@@ -207,10 +210,15 @@ async function parseM3uData(configKey, configObj) {
 
 async function parseXtreamData(configKey, configObj) {
     try {
+        if (!configObj) throw new Error("Configuration mapping context payload is missing.");
+        
+        // BULLETPROOF CHECK: Safely pull URL parameter string values
         const rawUrl = configObj.xtreamUrl || configObj.host || "";
+        if (!rawUrl) throw new Error("Xtream target base Server URL string parameter was undefined.");
+
         const baseUrl = rawUrl.endsWith('/') ? rawUrl.slice(0, -1) : rawUrl;
-        const user = configObj.username || configObj.user;
-        const pass = configObj.password || configObj.pass;
+        const user = configObj.username || configObj.user || "";
+        const pass = configObj.password || configObj.pass || "";
         const epg = configObj.epg;
 
         const apiBase = `${baseUrl}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}`;
