@@ -144,7 +144,6 @@ app.get('/', (req, res) => {
         const type = document.getElementById('providerType').value;
         const fallbackPref = document.getElementById('fallbackPreference').value;
         
-        // Pass the fallback preference to the config object so iptvParser knows what to do
         const configObj = { type, fallbackPreference: fallbackPref };
 
         if (type === 'xtream') {
@@ -155,7 +154,6 @@ app.get('/', (req, res) => {
             configObj.m3uUrl = document.getElementById('m3uUrl').value;
         }
 
-        // Base64 Payload Compression
         if (allCheckboxes.length > 0) {
             if (checked.length <= totalCategoriesCount / 2) {
                 configObj.include = checked;
@@ -164,7 +162,10 @@ app.get('/', (req, res) => {
             }
         }
 
-        const base64Config = btoa(unescape(encodeURIComponent(JSON.stringify(configObj))));
+        // Convert Base64 to URL-Safe Base64 so Express routing doesn't break
+        let base64Config = btoa(unescape(encodeURIComponent(JSON.stringify(configObj))));
+        base64Config = base64Config.replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '');
+        
         const manifestUrl = \`stremio://\${window.location.host}/\${base64Config}/manifest.json\`;
         
         alert("Success! Copying setup addon protocol mapping directly to device clipboard.");
@@ -211,7 +212,10 @@ app.post('/api/get-groups', async (req, res) => {
 // Stremio Addon Configuration Parsing
 function extractConfig(req) {
     try {
-        const rawB64 = req.params.config;
+        let rawB64 = req.params.config;
+        // Convert URL-Safe Base64 back into Standard Base64 for Node Buffer decoding
+        rawB64 = rawB64.replace(/-/g, '+').replace(/_/g, '/');
+        
         const decoded = Buffer.from(rawB64, 'base64').toString('utf8');
         return JSON.parse(decoded);
     } catch (e) {
@@ -250,7 +254,6 @@ app.get('/:config/catalog/:type/:id.json', async (req, res) => {
     const metas = [];
 
     for (const [chKey, channel] of ud.channelMap.entries()) {
-        // If meta.logo exists (via Supabase or Provider), use it. Otherwise, point to the custom text poster generator.
         const customImage = channel.meta.logo ? channel.meta.logo : `${rootUrl}/${config}/poster/${chKey}.png?t=${ud.lastUpdated}`;
         metas.push({
             id: channel.meta.id,
@@ -299,7 +302,6 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
     if (!ud || !ud.channelMap.has(id)) return res.json({ streams: [] });
     const channel = ud.channelMap.get(id);
 
-    // FIXED BUG: Properly mapping the streams array built by iptvParser.js
     const streamsToReturn = channel.streams.map(stream => ({
         title: stream.title ? `${stream.name} | ${stream.title}` : stream.name,
         url: stream.url
