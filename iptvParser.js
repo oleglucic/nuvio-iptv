@@ -34,7 +34,7 @@ function normaliseFormat(str) {
         'ⓕ':'f','Ⓕ':'f','ｆ':'f','Ｆ':'f','ⓖ':'g','Ⓖ':'g','ｇ':'g','Ｇ':'g','ⓗ':'h','Ⓗ':'h','ｈ':'h','Ｈ':'h','ⓘ':'i','Ⓘ':'i','ｉ':'i','Ｉ':'i','ⓙ':'j','Ⓙ':'j','ｊ':'j','Ｊ':'j',
         'ⓚ':'k','Ⓚ':'k','ｋ':'k','Ｋ':'k','ⓛ':'l','Ⓛ':'l','ｌ':'l','Ｌ':'l','ⓜ':'m','Ⓜ':'m','ｍ':'m','Ｍ':'m','ⓝ':'n','Ⓝ':'n','ｎ':'n','Ｎ':'n','ⓞ':'o','Ⓞ':'o','ｏ':'o','Ｏ':'o',
         'ⓟ':'p','Ⓟ':'p','ｐ':'p','Ｐ':'p','ⓠ':'q','Ⓠ':'q','ｑ':'q','Ｑ':'q','ⓡ':'r','Ⓡ':'r','ｒ':'r','Ｒ':'r','ⓢ':'s','Ⓢ':'s','ｓ':'s','Ｓ':'s','ⓣ':'t','Ⓣ':'t','ｔ':'t','Ｔ':'t',
-        '<b>':'','</b>':'','ⓤ':'u','Ⓤ':'u','u':'u','Ｕ':'u','ⓥ':'v','Ⓥ':'v','ｖ':'v','Ｖ':'v','ⓦ':'w','Ⓦ':'w','ｗ':'w','Ｗ':'w','ⓧ':'x','Ⓧ':'x','ｘ':'x','Ｘ':'x','ⓨ':'y','Ⓨ':'y','ｙ':'y','Ｙ':'y',
+        '<b>':'','</b>':'','ⓤ':'u','Ⓤ':'u','u':'u','Ｕ':'u','ⓥ':'v','Ⓥ':'v','ｖ':'v','Ｖ':'v','ⓦ':'w','Ⓦ':'w','ｗ':'w','裝':'w','ⓧ':'x','Ⓧ':'x','ｘ':'x','Ｘ':'x','ⓨ':'y','Ⓨ':'y','ｙ':'y','Ｙ':'y',
         'ⓩ':'z','Ⓩ':'z','ｚ':'z','Ｚ':'z'
     };
     return str.split('').map(c => map[c] || c).join('');
@@ -96,14 +96,15 @@ async function streamFetchIPTV(configKey, configObj) {
 
 async function parseM3uData(configKey, configObj) {
     try {
-        const res = await axios({ method: 'get', url: configObj.m3u, responseType: 'stream', headers: { 'Accept-Encoding': 'gzip,deflate', 'User-Agent': 'Mozilla/5.0' }, timeout: 60000 });
+        const m3uTargetUrl = configObj.m3uUrl || configObj.m3u;
+        const res = await axios({ method: 'get', url: m3uTargetUrl, responseType: 'stream', headers: { 'Accept-Encoding': 'gzip,deflate', 'User-Agent': 'Mozilla/5.0' }, timeout: 60000 });
         let mStream = res.data;
-        if (res.headers['content-encoding'] === 'gzip' || configObj.m3u.toLowerCase().endsWith('.gz')) mStream = mStream.pipe(zlib.createGunzip());
+        if (res.headers['content-encoding'] === 'gzip' || m3uTargetUrl.toLowerCase().endsWith('.gz')) mStream = mStream.pipe(zlib.createGunzip());
         const rl = readline.createInterface({ input: mStream, crlfDelay: Infinity });
         
         const tMap = new Map(), logoTrack = new Map(), tCat = []; 
         const groups = new Set(), epgMap = new Map(); 
-        const dirtyChannels = []; // Receptacle for unmapped AI channels
+        const dirtyChannels = [];
         let cItem = null;
         
         for await (const line of rl) {
@@ -114,9 +115,6 @@ async function parseM3uData(configKey, configObj) {
                 const grp = t.match(/group-title=["']([^"']+)["']/i);
                 let rawGrp = grp ? grp[1].trim() : 'Uncategorized';
 
-                // ==========================================
-                // THE PARSER BOUNCER (Server RAM Protection)
-                // ==========================================
                 if (configObj.include && configObj.include.length > 0) {
                     if (!configObj.include.includes(rawGrp)) { cItem = null; continue; }
                 } else if (configObj.exclude && configObj.exclude.length > 0) {
@@ -166,16 +164,11 @@ async function parseM3uData(configKey, configObj) {
                 
                 let finalLogo = logo ? logo[1] : '';
 
-                // [UNIVERSAL ASSET OVERRIDE WITH SUPABASE] 
                 const premiumAssets = await upgradeChannelAssets(rawName, configObj);
                 if (premiumAssets) {
                     if (premiumAssets.logo) finalLogo = premiumAssets.logo; 
                     if (premiumAssets.id) epgMap.set(premiumAssets.id.toLowerCase(), cId); 
-                    
-                    // Route to AI worker if missing from database
-                    if (premiumAssets.needsAiCuration) {
-                        dirtyChannels.push(rawName);
-                    }
+                    if (premiumAssets.needsAiCuration) dirtyChannels.push(rawName);
                 }
 
                 logoTrack.set(cId, { url: finalLogo, name: cName });
@@ -187,7 +180,7 @@ async function parseM3uData(configKey, configObj) {
                 groups.add(grp);
                 
                 if (!tMap.has(cId)) {
-                    const mItem = { id: `iptv:${cId}`, type: 'tv', name: cName.replace(/\b\w/g, c => c.toUpperCase()), genres: [grp], catalogId: catId };
+                    const mItem = { id: `iptv:${cId}`, type: 'tv', name: cName.replace(/\b\w/g, c => c.toUpperCase()), genres: [grp], catalogId: catId, logo: logo, rawName: rawName, group: grp };
                     tMap.set(cId, { meta: mItem, streams: [] }); 
                     tCat.push(mItem);
                 }
@@ -202,7 +195,6 @@ async function parseM3uData(configKey, configObj) {
         
         userCaches.set(configKey, { status: 'ready', channelMap: tMap, logoTracker: logoTrack, catalogItems: tCat, uniqueGroups: groups, epgData: tEpg, lastUpdated: Date.now() });
         
-        // Trigger AI background job on deduplicated dirty array
         if (configObj.ai && dirtyChannels.length > 0) {
             const uniqueDirty = [...new Set(dirtyChannels)];
             startAiQueue(uniqueDirty, configKey).catch(err => console.error("[AI Queue Error]", err));
@@ -215,8 +207,12 @@ async function parseM3uData(configKey, configObj) {
 
 async function parseXtreamData(configKey, configObj) {
     try {
-        const { host, user, pass, epg } = configObj;
-        const baseUrl = host.endsWith('/') ? host.slice(0, -1) : host;
+        const rawUrl = configObj.xtreamUrl || configObj.host || "";
+        const baseUrl = rawUrl.endsWith('/') ? rawUrl.slice(0, -1) : rawUrl;
+        const user = configObj.username || configObj.user;
+        const pass = configObj.password || configObj.pass;
+        const epg = configObj.epg;
+
         const apiBase = `${baseUrl}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}`;
 
         console.log(`[Xtream Engine] Querying data channels from endpoint: ${baseUrl}`);
@@ -248,9 +244,6 @@ async function parseXtreamData(configKey, configObj) {
 
             const rawGrp = catMap.get(stream.category_id?.toString()) || 'Uncategorized';
 
-            // ==========================================
-            // THE PARSER BOUNCER (Server RAM Protection)
-            // ==========================================
             if (configObj.include && configObj.include.length > 0) {
                 if (!configObj.include.includes(rawGrp)) continue;
             } else if (configObj.exclude && configObj.exclude.length > 0) {
@@ -294,15 +287,11 @@ async function parseXtreamData(configKey, configObj) {
 
             let finalLogo = stream.stream_icon || '';
             
-            // [UNIVERSAL ASSET OVERRIDE WITH SUPABASE] 
             const premiumAssets = await upgradeChannelAssets(rawName, configObj);
             if (premiumAssets) {
                 if (premiumAssets.logo) finalLogo = premiumAssets.logo; 
                 if (premiumAssets.id) epgMap.set(premiumAssets.id.toLowerCase(), cId); 
-                
-                if (premiumAssets.needsAiCuration) {
-                    dirtyChannels.push(rawName);
-                }
+                if (premiumAssets.needsAiCuration) dirtyChannels.push(rawName);
             }
 
             logoTrack.set(cId, { url: finalLogo, name: cName });
@@ -311,7 +300,7 @@ async function parseXtreamData(configKey, configObj) {
             groups.add(finalGrp);
 
             if (!tMap.has(cId)) {
-                const mItem = { id: `iptv:${cId}`, type: 'tv', name: cName.replace(/\b\w/g, c => c.toUpperCase()), genres: [finalGrp], catalogId: catId };
+                const mItem = { id: `iptv:${cId}`, type: 'tv', name: cName.replace(/\b\w/g, c => c.toUpperCase()), genres: [finalGrp], catalogId: catId, logo: finalLogo, rawName: rawName, group: finalGrp };
                 tMap.set(cId, { meta: mItem, streams: [] });
                 tCat.push(mItem);
             }
