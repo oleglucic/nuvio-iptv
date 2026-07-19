@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const { streamFetchIPTV, getEpgText, userCaches } = require('./iptvParser');
-const { generateFallbackPoster } = require('./imageEngine');
+const { getPremiumPoster } = require('./imageEngine'); // <-- FIXED IMPORT
 const { syncPremiumEpgToSupabase } = require('./universalEpg');
 
 const app = express();
@@ -224,7 +224,6 @@ app.get('/', (req, res) => {
         
         const manifestUrl = \`stremio://\${window.location.host}/\${base64Config}/manifest.json\`;
         
-        // Silently write to clipboard, then fire the Stremio protocol window instantly without alerts
         navigator.clipboard.writeText(manifestUrl).catch(() => {}).finally(() => {
             window.location.href = manifestUrl;
         });
@@ -405,14 +404,23 @@ app.get('/:config/poster/:id.png', async (req, res) => {
     if (id.startsWith('iptv:')) id = id.substring(5);
     
     const ud = userCaches.get(config);
+    let logoUrl = null;
     let channelName = "Live TV";
+    
     if (ud && ud.channelMap.has(id)) {
-        channelName = ud.channelMap.get(id).meta.name;
+        const channel = ud.channelMap.get(id);
+        logoUrl = channel.meta.logo;
+        channelName = channel.meta.name;
     }
 
-    const imgBuffer = await generateFallbackPoster(channelName);
-    res.set('Content-Type', 'image/png');
-    res.send(imgBuffer);
+    try {
+        // FIXED: Calls the right function name and securely serves the cached image path string back to Stremio
+        const cachedPosterPath = await getPremiumPoster(id, logoUrl, channelName);
+        res.sendFile(cachedPosterPath);
+    } catch (error) {
+        console.error("[Poster Generation Error]", error.message);
+        res.status(500).send("Error compiling image layer context");
+    }
 });
 
 const PORT = process.env.PORT || 3000;
