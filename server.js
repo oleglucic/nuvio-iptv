@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
-const { streamFetchIPTV, userCaches } = require('./iptvParser');
+const { streamFetchIPTV, getEpgText, userCaches } = require('./iptvParser');
 const { generateFallbackPoster } = require('./imageEngine');
 const { syncPremiumEpgToSupabase } = require('./universalEpg');
 
@@ -32,6 +32,7 @@ app.get('/', (req, res) => {
         .chk-row { display: flex; align-items: center; margin: 6px 0; cursor: pointer; font-size: 13px; }
         .chk-row input { width: auto; margin-right: 10px; }
         .setting-label { color:#818cf8; font-weight:bold; font-size:14px; display:block; text-align:left; margin: 15px 0 5px 0; }
+        .row-flex { display: flex; gap: 10px; }
     </style>
 </head>
 <body>
@@ -54,11 +55,48 @@ app.get('/', (req, res) => {
         <input type="text" id="m3uUrl" placeholder="Paste full .m3u / .m3u8 link here">
     </div>
 
-    <label class="setting-label">Missing Logo Behavior</label>
-    <select id="fallbackPreference">
-        <option value="custom">Generate Clean Text Posters (Recommended)</option>
-        <option value="provider">Use Provider's Raw Image (If available)</option>
-    </select>
+    <div class="row-flex">
+        <div style="width: 50%;">
+            <label class="setting-label">Fallback Mode</label>
+            <select id="fallbackPreference">
+                <option value="custom">Clean Text Posters</option>
+                <option value="provider">Raw Image</option>
+            </select>
+        </div>
+        <div style="width: 50%;">
+            <label class="setting-label">Timezone Shift</label>
+            <select id="timezoneOffset">
+                <option value="-12">UTC -12</option>
+                <option value="-11">UTC -11</option>
+                <option value="-10">UTC -10</option>
+                <option value="-9">UTC -9</option>
+                <option value="-8">UTC -8</option>
+                <option value="-7">UTC -7</option>
+                <option value="-6">UTC -6</option>
+                <option value="-5">UTC -5</option>
+                <option value="-4">UTC -4</option>
+                <option value="-3">UTC -3</option>
+                <option value="-2">UTC -2</option>
+                <option value="-1">UTC -1</option>
+                <option value="0">UTC +0</option>
+                <option value="1">UTC +1</option>
+                <option value="2">UTC +2</option>
+                <option value="3">UTC +3</option>
+                <option value="4">UTC +4</option>
+                <option value="5">UTC +5</option>
+                <option value="6">UTC +6</option>
+                <option value="7">UTC +7</option>
+                <option value="8">UTC +8</option>
+                <option value="9">UTC +9</option>
+                <option value="10">UTC +10</option>
+                <option value="11">UTC +11</option>
+                <option value="12">UTC +12</option>
+            </select>
+        </div>
+    </div>
+
+    <label class="setting-label">Custom EPG Source (Optional)</label>
+    <input type="text" id="customEpgUrl" placeholder="Leave empty to use provider EPG">
 
     <button type="button" id="loadCatalogsBtn" onclick="fetchCatalogs()">Load Available Catalogs</button>
 
@@ -76,6 +114,16 @@ app.get('/', (req, res) => {
 
 <script>
     let totalCategoriesCount = 0;
+
+    // Automated Timezone Calculation Loop
+    window.onload = function() {
+        toggleFormInputs();
+        const detectedOffset = -Math.round(new Date().getTimezoneOffset() / 60);
+        const tzSelect = document.getElementById('timezoneOffset');
+        if (tzSelect.querySelector('option[value="' + detectedOffset + '"]')) {
+            tzSelect.value = detectedOffset.toString();
+        }
+    };
 
     function toggleFormInputs() {
         const type = document.getElementById('providerType').value;
@@ -143,8 +191,18 @@ app.get('/', (req, res) => {
 
         const type = document.getElementById('providerType').value;
         const fallbackPref = document.getElementById('fallbackPreference').value;
+        const tzOffset = document.getElementById('timezoneOffset').value;
+        const customEpg = document.getElementById('customEpgUrl').value.trim();
         
-        const configObj = { type, fallbackPreference: fallbackPref };
+        const configObj = { 
+            type, 
+            fallbackPreference: fallbackPref,
+            timezoneOffset: parseInt(tzOffset)
+        };
+
+        if (customEpg) {
+            configObj.epg = customEpg;
+        }
 
         if (type === 'xtream') {
             configObj.xtreamUrl = document.getElementById('xtreamUrl').value;
@@ -167,10 +225,8 @@ app.get('/', (req, res) => {
         
         const manifestUrl = \`stremio://\${window.location.host}/\${base64Config}/manifest.json\`;
         
-        alert("Success! Copying setup addon protocol mapping directly to device clipboard.");
-        navigator.clipboard.writeText(manifestUrl).then(() => {
-            window.location.href = manifestUrl;
-        });
+        alert("Success! Addon configuration mapping ready.");
+        window.location.href = manifestUrl;
     }
 </script>
 </body>
@@ -274,11 +330,11 @@ app.get('/:config/catalog/:type/:id.json', async (req, res) => {
     for (const [chKey, channel] of ud.channelMap.entries()) {
         if (channel.meta.catalogId !== catalogId && catalogId !== 'iptvo_live') continue;
 
-        // FIXED: Poster and background are strictly forced to use the canvas generation engine
         const engineImage = `${rootUrl}/${config}/poster/${chKey}.png?t=${ud.lastUpdated}`;
-        
-        // FIXED: The logo field passes the source image asset straight through (or falls back to engine text if empty)
         const passedThroughLogo = channel.meta.logo || engineImage;
+
+        // Fetch dynamic guide descriptions using the user's localized offset
+        const epgDescription = getEpgText(chKey, ud.epgData, configObj.timezoneOffset || 0);
 
         metas.push({
             id: channel.meta.id,
@@ -287,7 +343,7 @@ app.get('/:config/catalog/:type/:id.json', async (req, res) => {
             poster: engineImage,
             background: engineImage,
             logo: passedThroughLogo,
-            description: `Category: ${channel.meta.group}`
+            description: epgDescription
         });
     }
     res.json({ metas });
@@ -297,6 +353,7 @@ app.get('/:config/catalog/:type/:id.json', async (req, res) => {
 app.get('/:config/meta/:type/:id.json', async (req, res) => {
     const config = req.params.config;
     let id = req.params.id;
+    const configObj = extractConfig(req);
     
     if (id.startsWith('iptv:')) id = id.substring(5);
 
@@ -305,10 +362,10 @@ app.get('/:config/meta/:type/:id.json', async (req, res) => {
     const channel = ud.channelMap.get(id);
 
     const rootUrl = `${req.protocol}://${req.get('host')}`;
-    
-    // FIXED: Enforce identical asset structural separation inside details view layout card
     const engineImage = `${rootUrl}/${config}/poster/${id}.png?t=${ud.lastUpdated}`;
     const passedThroughLogo = channel.meta.logo || engineImage;
+
+    const epgDescription = getEpgText(id, ud.epgData, configObj ? configObj.timezoneOffset : 0);
 
     res.json({
         meta: {
@@ -318,7 +375,7 @@ app.get('/:config/meta/:type/:id.json', async (req, res) => {
             poster: engineImage,
             background: engineImage,
             logo: passedThroughLogo,
-            description: `Live Stream: ${channel.meta.name} via category [${channel.meta.group}]`
+            description: epgDescription
         }
     });
 });
@@ -361,8 +418,4 @@ app.get('/:config/poster/:id.png', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`IPTVo Premium Backend operational on port ${PORT}`);
-    const epgSourceUrl = 'https://epgshare01.online/epgshare01/epg_ripper_ALL_SOURCES1.xml.gz';
-    syncPremiumEpgToSupabase(epgSourceUrl);
-});
+app.listen(PORT, () => console.log(`IPTVo Premium Backend operational on port ${PORT}`));
