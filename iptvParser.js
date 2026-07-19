@@ -2,7 +2,7 @@ const axios = require('axios');
 const readline = require('readline');
 const zlib = require('zlib');
 const { Readable } = require('stream');
-const { startAiQueue, globalAiCache } = require('./aiCurator'); 
+const { startAiQueue } = require('./aiCurator'); 
 const { upgradeChannelAssets } = require('./universalEpg'); 
 
 const userCaches = new Map();
@@ -101,19 +101,35 @@ async function parseM3uData(configKey, configObj) {
         if (res.headers['content-encoding'] === 'gzip' || configObj.m3u.toLowerCase().endsWith('.gz')) mStream = mStream.pipe(zlib.createGunzip());
         const rl = readline.createInterface({ input: mStream, crlfDelay: Infinity });
         
-        const tMap = new Map(), logoTrack = new Map(), tCat = []; const groups = new Set(), epgMap = new Map(); let cItem = null;
+        const tMap = new Map(), logoTrack = new Map(), tCat = []; 
+        const groups = new Set(), epgMap = new Map(); 
+        const dirtyChannels = []; // Receptacle for unmapped AI channels
+        let cItem = null;
         
         for await (const line of rl) {
             const t = line.trim();
             if (t.startsWith('#EXTINF:')) {
                 if (t.match(/\.(mp4|mkv)$/i) || t.includes('/movie/') || t.includes('/series/')) { cItem = null; continue; }
-                const tvgId = t.match(/tvg-id=["']([^"']+)["']/i), tvgName = t.match(/tvg-name=["']([^"']+)["']/i);
-                const logo = t.match(/tvg-logo=["']([^"']+)["']/i), grp = t.match(/group-title=["']([^"']+)["']/i);
+                
+                const grp = t.match(/group-title=["']([^"']+)["']/i);
+                let rawGrp = grp ? grp[1].trim() : 'Uncategorized';
+
+                // ==========================================
+                // THE PARSER BOUNCER (Server RAM Protection)
+                // ==========================================
+                if (configObj.include && configObj.include.length > 0) {
+                    if (!configObj.include.includes(rawGrp)) { cItem = null; continue; }
+                } else if (configObj.exclude && configObj.exclude.length > 0) {
+                    if (configObj.exclude.includes(rawGrp)) { cItem = null; continue; }
+                }
+
+                const tvgId = t.match(/tvg-id=["']([^"']+)["']/i);
+                const tvgName = t.match(/tvg-name=["']([^"']+)["']/i);
+                const logo = t.match(/tvg-logo=["']([^"']+)["']/i);
                 const rawName = t.lastIndexOf(',') !== -1 ? t.substring(t.lastIndexOf(',') + 1).trim() : "Unknown";
                 
                 if (/([#\-\*_=\+~]){3,}/.test(rawName) || rawName.includes('----') || rawName.includes('####')) { cItem = null; continue; }
                 
-                let rawGrp = grp ? grp[1].trim() : 'Uncategorized';
                 let normGrp = normaliseFormat(rawGrp).toLowerCase();
                 let countryPrefix = "";
                 
@@ -142,11 +158,6 @@ async function parseM3uData(configKey, configObj) {
                 const baseCleanName = cName.replace(/[^a-z0-9]/g, "") || "unknown";
                 let cId = `${countryScopeKey}_${baseCleanName}`;
                 
-                // [AI CURATION OVERRIDE]
-                if (globalAiCache.has(rawName)) {
-                    cId = globalAiCache.get(rawName);
-                }
-                
                 if (tvgId) epgMap.set(tvgId[1].toLowerCase().trim(), cId);
                 if (tvgName) epgMap.set(tvgName[1].toLowerCase().trim(), cId);
                 epgMap.set(rawName.toLowerCase().trim(), cId);
@@ -155,25 +166,30 @@ async function parseM3uData(configKey, configObj) {
                 
                 let finalLogo = logo ? logo[1] : '';
 
-                // [UNIVERSAL ASSET OVERRIDE] 
-                const premiumAssets = await upgradeChannelAssets(baseCleanName);
-                if (premiumAssets && premiumAssets.logo) {
-                    finalLogo = premiumAssets.logo; 
-                    if (premiumAssets.id) {
-                        epgMap.set(premiumAssets.id.toLowerCase(), cId); 
+                // [UNIVERSAL ASSET OVERRIDE WITH SUPABASE] 
+                const premiumAssets = await upgradeChannelAssets(rawName, configObj);
+                if (premiumAssets) {
+                    if (premiumAssets.logo) finalLogo = premiumAssets.logo; 
+                    if (premiumAssets.id) epgMap.set(premiumAssets.id.toLowerCase(), cId); 
+                    
+                    // Route to AI worker if missing from database
+                    if (premiumAssets.needsAiCuration) {
+                        dirtyChannels.push(rawName);
                     }
                 }
 
                 logoTrack.set(cId, { url: finalLogo, name: cName });
-                
                 cItem = { cId, cName, rawName, logo: finalLogo, grp: finalGrp };
+
             } else if (t.startsWith('http') && cItem) {
                 const { cId, cName, rawName, logo, grp } = cItem;
                 const catId = `iptv_${grp.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase()}`;
                 groups.add(grp);
+                
                 if (!tMap.has(cId)) {
                     const mItem = { id: `iptv:${cId}`, type: 'tv', name: cName.replace(/\b\w/g, c => c.toUpperCase()), genres: [grp], catalogId: catId };
-                    tMap.set(cId, { meta: mItem, streams: [] }); tCat.push(mItem);
+                    tMap.set(cId, { meta: mItem, streams: [] }); 
+                    tCat.push(mItem);
                 }
                 
                 const sInfo = parseStreamInfo(rawName);
@@ -186,8 +202,10 @@ async function parseM3uData(configKey, configObj) {
         
         userCaches.set(configKey, { status: 'ready', channelMap: tMap, logoTracker: logoTrack, catalogItems: tCat, uniqueGroups: groups, epgData: tEpg, lastUpdated: Date.now() });
         
-        if (configObj.ai) {
-            startAiQueue(userCaches.get(configKey), configKey).catch(err => console.error("[AI Queue Error]", err));
+        // Trigger AI background job on deduplicated dirty array
+        if (configObj.ai && dirtyChannels.length > 0) {
+            const uniqueDirty = [...new Set(dirtyChannels)];
+            startAiQueue(uniqueDirty, configKey).catch(err => console.error("[AI Queue Error]", err));
         }
 
     } catch(e) {
@@ -223,14 +241,25 @@ async function parseXtreamData(configKey, configObj) {
 
         const tMap = new Map(), logoTrack = new Map(), tCat = [];
         const groups = new Set(), epgMap = new Map();
+        const dirtyChannels = [];
 
         for (const stream of streamRes.data) {
             if (stream.stream_type !== 'live' || !stream.stream_id) continue;
 
+            const rawGrp = catMap.get(stream.category_id?.toString()) || 'Uncategorized';
+
+            // ==========================================
+            // THE PARSER BOUNCER (Server RAM Protection)
+            // ==========================================
+            if (configObj.include && configObj.include.length > 0) {
+                if (!configObj.include.includes(rawGrp)) continue;
+            } else if (configObj.exclude && configObj.exclude.length > 0) {
+                if (configObj.exclude.includes(rawGrp)) continue;
+            }
+
             const rawName = stream.name || "Unknown Channel";
             if (/([#\-\*_=\+~]){3,}/.test(rawName) || rawName.includes('----') || rawName.includes('####')) continue;
 
-            const rawGrp = catMap.get(stream.category_id?.toString()) || 'Uncategorized';
             let normGrp = normaliseFormat(rawGrp).toLowerCase();
             let countryPrefix = "";
 
@@ -259,23 +288,20 @@ async function parseXtreamData(configKey, configObj) {
             const baseCleanName = cName.replace(/[^a-z0-9]/g, "") || "unknown";
             let cId = `${countryScopeKey}_${baseCleanName}`;
 
-            // [AI CURATION OVERRIDE]
-            if (globalAiCache.has(rawName)) {
-                cId = globalAiCache.get(rawName);
-            }
-
             if (stream.epg_channel_id) epgMap.set(stream.epg_channel_id.toLowerCase().trim(), cId);
             epgMap.set(rawName.toLowerCase().trim(), cId);
             epgMap.set(cId, cId);
 
             let finalLogo = stream.stream_icon || '';
             
-            // [UNIVERSAL ASSET OVERRIDE] 
-            const premiumAssets = await upgradeChannelAssets(baseCleanName);
-            if (premiumAssets && premiumAssets.logo) {
-                finalLogo = premiumAssets.logo; 
-                if (premiumAssets.id) {
-                    epgMap.set(premiumAssets.id.toLowerCase(), cId); 
+            // [UNIVERSAL ASSET OVERRIDE WITH SUPABASE] 
+            const premiumAssets = await upgradeChannelAssets(rawName, configObj);
+            if (premiumAssets) {
+                if (premiumAssets.logo) finalLogo = premiumAssets.logo; 
+                if (premiumAssets.id) epgMap.set(premiumAssets.id.toLowerCase(), cId); 
+                
+                if (premiumAssets.needsAiCuration) {
+                    dirtyChannels.push(rawName);
                 }
             }
 
@@ -301,8 +327,9 @@ async function parseXtreamData(configKey, configObj) {
         userCaches.set(configKey, { status: 'ready', channelMap: tMap, logoTracker: logoTrack, catalogItems: tCat, uniqueGroups: groups, epgData: tEpg, lastUpdated: Date.now() });
         console.log(`[Xtream Engine] Categorized and loaded ${tCat.length} streams inside memory.`);
 
-        if (configObj.ai) {
-            startAiQueue(userCaches.get(configKey), configKey).catch(err => console.error("[AI Queue Error]", err));
+        if (configObj.ai && dirtyChannels.length > 0) {
+            const uniqueDirty = [...new Set(dirtyChannels)];
+            startAiQueue(uniqueDirty, configKey).catch(err => console.error("[AI Queue Error]", err));
         }
 
     } catch(e) {
