@@ -3,6 +3,7 @@ const cors = require('cors');
 const axios = require('axios');
 const { streamFetchIPTV, userCaches } = require('./iptvParser');
 const { generateFallbackPoster } = require('./imageEngine');
+const { syncPremiumEpgToSupabase } = require('./universalEpg');
 
 const app = express();
 app.use(cors());
@@ -324,4 +325,10 @@ app.get('/:config/poster/:id.png', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`IPTVo Premium Backend operational on port ${PORT}`));
+app.listen(PORT, () => {
+    console.log(`IPTVo Premium Backend operational on port ${PORT}`);
+    
+    // Trigger the EPG sync in the background automatically when the server boots
+    const epgSourceUrl = 'https://epgshare01.online/epgshare01/epg_ripper_ALL_SOURCES1.xml.gz';
+    syncPremiumEpgToSupabase(epgSourceUrl);
+});
