@@ -109,13 +109,12 @@ app.get('/', (req, res) => {
         <div id="checklistList" class="scroll-box"></div>
     </div>
 
-    <button type="button" id="installBtn" onclick="generateStremioLink()" style="background:#059669; margin-top:15px;">Generate Stremio Link</button>
+    <button type="button" id="installBtn" onclick="generateStremioLink()" style="background:#059669; margin-top:15px;">Install Addon</button>
 </div>
 
 <script>
     let totalCategoriesCount = 0;
 
-    // Automated Timezone Calculation Loop
     window.onload = function() {
         toggleFormInputs();
         const detectedOffset = -Math.round(new Date().getTimezoneOffset() / 60);
@@ -225,8 +224,10 @@ app.get('/', (req, res) => {
         
         const manifestUrl = \`stremio://\${window.location.host}/\${base64Config}/manifest.json\`;
         
-        alert("Success! Addon configuration mapping ready.");
-        window.location.href = manifestUrl;
+        // Silently write to clipboard, then fire the Stremio protocol window instantly without alerts
+        navigator.clipboard.writeText(manifestUrl).catch(() => {}).finally(() => {
+            window.location.href = manifestUrl;
+        });
     }
 </script>
 </body>
@@ -332,8 +333,6 @@ app.get('/:config/catalog/:type/:id.json', async (req, res) => {
 
         const engineImage = `${rootUrl}/${config}/poster/${chKey}.png?t=${ud.lastUpdated}`;
         const passedThroughLogo = channel.meta.logo || engineImage;
-
-        // Fetch dynamic guide descriptions using the user's localized offset
         const epgDescription = getEpgText(chKey, ud.epgData, configObj.timezoneOffset || 0);
 
         metas.push({
@@ -364,7 +363,6 @@ app.get('/:config/meta/:type/:id.json', async (req, res) => {
     const rootUrl = `${req.protocol}://${req.get('host')}`;
     const engineImage = `${rootUrl}/${config}/poster/${id}.png?t=${ud.lastUpdated}`;
     const passedThroughLogo = channel.meta.logo || engineImage;
-
     const epgDescription = getEpgText(id, ud.epgData, configObj ? configObj.timezoneOffset : 0);
 
     res.json({
