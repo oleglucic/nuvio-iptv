@@ -162,7 +162,6 @@ app.get('/', (req, res) => {
             }
         }
 
-        // Convert Base64 to URL-Safe Base64 so Express routing doesn't break
         let base64Config = btoa(unescape(encodeURIComponent(JSON.stringify(configObj))));
         base64Config = base64Config.replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '');
         
@@ -213,9 +212,7 @@ app.post('/api/get-groups', async (req, res) => {
 function extractConfig(req) {
     try {
         let rawB64 = req.params.config;
-        // Convert URL-Safe Base64 back into Standard Base64 for Node Buffer decoding
         rawB64 = rawB64.replace(/-/g, '+').replace(/_/g, '/');
-        
         const decoded = Buffer.from(rawB64, 'base64').toString('utf8');
         return JSON.parse(decoded);
     } catch (e) {
@@ -271,9 +268,12 @@ app.get('/:config/catalog/:type/:id.json', async (req, res) => {
 // Stremio Meta Information Router
 app.get('/:config/meta/:type/:id.json', async (req, res) => {
     const config = req.params.config;
-    const id = req.params.id;
-    const ud = userCaches.get(config);
+    let id = req.params.id;
+    
+    // STRIP PREFIX: Normalize the key lookup by removing the "iptv:" prefix if sent by Stremio
+    if (id.startsWith('iptv:')) id = id.substring(5);
 
+    const ud = userCaches.get(config);
     if (!ud || !ud.channelMap.has(id)) return res.json({ meta: {} });
     const channel = ud.channelMap.get(id);
 
@@ -296,12 +296,16 @@ app.get('/:config/meta/:type/:id.json', async (req, res) => {
 // Stremio Stream Handler Routing
 app.get('/:config/stream/:type/:id.json', async (req, res) => {
     const config = req.params.config;
-    const id = req.params.id;
-    const ud = userCaches.get(config);
+    let id = req.params.id;
 
+    // STRIP PREFIX: Normalize the key lookup by removing the "iptv:" prefix
+    if (id.startsWith('iptv:')) id = id.substring(5);
+
+    const ud = userCaches.get(config);
     if (!ud || !ud.channelMap.has(id)) return res.json({ streams: [] });
     const channel = ud.channelMap.get(id);
 
+    // Map out the streams array built inside iptvParser
     const streamsToReturn = channel.streams.map(stream => ({
         title: stream.title ? `${stream.name} | ${stream.title}` : stream.name,
         url: stream.url
@@ -313,9 +317,11 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
 // Fallback Canvas Image Generator Route
 app.get('/:config/poster/:id.png', async (req, res) => {
     const config = req.params.config;
-    const id = req.params.id;
+    let id = req.params.id;
+    
+    if (id.startsWith('iptv:')) id = id.substring(5);
+    
     const ud = userCaches.get(config);
-
     let channelName = "Live TV";
     if (ud && ud.channelMap.has(id)) {
         channelName = ud.channelMap.get(id).meta.name;
@@ -329,8 +335,6 @@ app.get('/:config/poster/:id.png', async (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`IPTVo Premium Backend operational on port ${PORT}`);
-    
-    // Trigger the EPG sync in the background automatically when the server boots
     const epgSourceUrl = 'https://epgshare01.online/epgshare01/epg_ripper_ALL_SOURCES1.xml.gz';
     syncPremiumEpgToSupabase(epgSourceUrl);
 });
