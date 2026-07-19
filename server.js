@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const { streamFetchIPTV, getEpgText, userCaches } = require('./iptvParser');
-const { getPremiumPoster } = require('./imageEngine'); // <-- FIXED IMPORT
+const { getPremiumPoster } = require('./imageEngine');
 const { syncPremiumEpgToSupabase } = require('./universalEpg');
 
 const app = express();
@@ -276,31 +276,8 @@ function extractConfig(req) {
     }
 }
 
-// Stremio Manifest Router
-app.get('/:config/manifest.json', async (req, res) => {
-    const config = req.params.config;
-    const configObj = extractConfig(req);
-    if (!configObj) return res.status(400).send("Bad Config Structure");
-
-    await streamFetchIPTV(config, configObj);
-    const ud = userCaches.get(config);
-    
-    const dynamicCatalogs = [];
-    if (ud && ud.uniqueGroups) {
-        ud.uniqueGroups.forEach(grp => {
-            const catId = `iptv_${grp.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase()}`;
-            dynamicCatalogs.push({
-                type: 'tv',
-                id: catId,
-                name: grp
-            });
-        });
-    }
-
-    if (dynamicCatalogs.length === 0) {
-        dynamicCatalogs.push({ type: 'tv', id: 'iptvo_live', name: 'IPTVo Live TV' });
-    }
-
+// Stremio Manifest Router - FIXED: Returns instantly to completely prevent first-load timeouts
+app.get('/:config/manifest.json', (req, res) => {
     res.json({
         id: 'org.iptvo.premium',
         version: '1.0.0',
@@ -308,14 +285,19 @@ app.get('/:config/manifest.json', async (req, res) => {
         description: 'AI Curation Stack & Intelligent Catalog Filter Layer',
         resources: ['catalog', 'meta', 'stream'],
         types: ['tv'],
-        catalogs: dynamicCatalogs
+        catalogs: [{
+            type: 'tv',
+            id: 'iptvo_live',
+            name: 'IPTVo Live TV',
+            // Tells Stremio to open the dynamic genre filter sidebar menu inside this catalog screen
+            extra: [{ name: 'genre', isRequired: false }]
+        }]
     });
 });
 
-// Stremio Catalog Router
+// Stremio Catalog Router - FIXED: Handles all processing and filtering safely with full UI loading spinners
 app.get('/:config/catalog/:type/:id.json', async (req, res) => {
     const config = req.params.config;
-    const catalogId = req.params.id; 
     const configObj = extractConfig(req);
     if (!configObj) return res.json({ metas: [] });
 
@@ -325,10 +307,12 @@ app.get('/:config/catalog/:type/:id.json', async (req, res) => {
     if (!ud || !ud.channelMap) return res.json({ metas: [] });
 
     const rootUrl = `${req.protocol}://${req.get('host')}`;
+    const selectedGenre = req.query.genre; // Intercepts the sidebar selection from the user
     const metas = [];
 
     for (const [chKey, channel] of ud.channelMap.entries()) {
-        if (channel.meta.catalogId !== catalogId && catalogId !== 'iptvo_live') continue;
+        // Enforce genre sidebar filter routing constraints
+        if (selectedGenre && channel.meta.group !== selectedGenre) continue;
 
         const engineImage = `${rootUrl}/${config}/poster/${chKey}.png?t=${ud.lastUpdated}`;
         const passedThroughLogo = channel.meta.logo || engineImage;
@@ -341,7 +325,8 @@ app.get('/:config/catalog/:type/:id.json', async (req, res) => {
             poster: engineImage,
             background: engineImage,
             logo: passedThroughLogo,
-            description: epgDescription
+            description: epgDescription,
+            genres: [channel.meta.group] // Automatically populates the sidebar checkboxes inside Stremio
         });
     }
     res.json({ metas });
@@ -414,7 +399,6 @@ app.get('/:config/poster/:id.png', async (req, res) => {
     }
 
     try {
-        // FIXED: Calls the right function name and securely serves the cached image path string back to Stremio
         const cachedPosterPath = await getPremiumPoster(id, logoUrl, channelName);
         res.sendFile(cachedPosterPath);
     } catch (error) {
