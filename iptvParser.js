@@ -1,11 +1,23 @@
 const axios = require('axios');
 const readline = require('readline');
 const zlib = require('zlib');
+const sax = require('sax');
 const { Readable } = require('stream');
 const { startAiQueue, globalAiCache } = require('./aiCurator'); 
-const { upgradeChannelAssets } = require('./universalEpg'); 
+const { getOverride } = require('./db');
 
 const userCaches = new Map();
+const MAX_CACHE_AGE = 60 * 60 * 1000; // 1 hour
+
+function getUserCache(configKey) {
+    const cached = userCaches.get(configKey);
+    if (!cached) return null;
+    if (Date.now() - cached.lastUpdated > MAX_CACHE_AGE) {
+        userCaches.delete(configKey);
+        return null;
+    }
+    return cached;
+}
 
 function parseXMLDate(x) {
     if (!x || x.length < 14) return 0;
@@ -79,7 +91,8 @@ function parseStreamInfo(n) {
 async function streamFetchIPTV(configKey, configObj) {
     if (userCaches.has(configKey)) {
         const existing = userCaches.get(configKey);
-        if (existing.status === 'loading' || existing.status === 'ready') return;
+        if (existing.status === 'loading') return;
+        if (existing.status === 'ready' && (Date.now() - existing.lastUpdated < MAX_CACHE_AGE)) return;
     }
     
     userCaches.set(configKey, { 
@@ -157,16 +170,17 @@ async function parseM3uData(configKey, configObj) {
                 
                 const countryScopeKey = countryPrefix ? countryPrefix.replace(/[^A-Z]/g, '').toLowerCase() : 'global';
                 const baseCleanName = cName.replace(/[^a-z0-9]/g, "") || "unknown";
-                let cId = `${countryScopeKey}_${baseCleanName}`;
                 
-                // [AI ASSIST OVERRIDE - DEDUPLICATION LAYER]
-                if (globalAiCache.has(rawName)) {
-                    cId = globalAiCache.get(rawName);
+                // Keep the prefix: cId always starts with iptv:
+                let cId = `iptv:${countryScopeKey}_${baseCleanName}`;
+                
+                // 1. Check Supabase Override DB first
+                const dbMapping = await getOverride(rawName);
+                if (dbMapping && dbMapping.confidence >= 0.5) {
+                    cId = dbMapping.canonical_id;
                 } else {
-                    // Trigger optimization on backup paths, alternative lines, or failed structures
-                    if (rawName.toLowerCase().includes('backup') || rawName.toLowerCase().includes('alt') || baseCleanName === 'unknown') {
-                        dirtyChannels.push(rawName);
-                    }
+                    // Queue for async background AI deduplication if not mapped or low confidence
+                    dirtyChannels.push({ rawName, baseCleanName, cId });
                 }
                 
                 if (tvgId) epgMap.set(tvgId[1].toLowerCase().trim(), cId);
@@ -176,27 +190,17 @@ async function parseM3uData(configKey, configObj) {
                 epgMap.set(cId, cId);
                 
                 let finalLogo = logo ? logo[1] : '';
-                let isPremiumLogo = false;
-
-                const premiumAssets = await upgradeChannelAssets(rawName, configObj);
-                if (premiumAssets) {
-                    if (premiumAssets.logo) {
-                        finalLogo = premiumAssets.logo; 
-                        isPremiumLogo = true;
-                    }
-                    if (premiumAssets.id) epgMap.set(premiumAssets.id.toLowerCase(), cId); 
-                }
 
                 logoTrack.set(cId, { url: finalLogo, name: cName });
-                cItem = { cId, cName, rawName, logo: finalLogo, isPremiumLogo, grp: finalGrp };
+                cItem = { cId, cName, rawName, logo: finalLogo, grp: finalGrp };
 
             } else if (t.startsWith('http') && cItem) {
-                const { cId, cName, rawName, logo, isPremiumLogo, grp } = cItem;
+                const { cId, cName, rawName, logo, grp } = cItem;
                 const catId = `iptv_${grp.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase()}`;
                 groups.add(grp);
                 
                 if (!tMap.has(cId)) {
-                    const mItem = { id: `iptv:${cId}`, type: 'tv', name: cName.replace(/\b\w/g, c => c.toUpperCase()), genres: [grp], catalogId: catId, logo: logo, isPremiumLogo: isPremiumLogo, rawName: rawName, group: grp };
+                    const mItem = { id: cId, type: 'tv', name: cName.replace(/\b\w/g, c => c.toUpperCase()), genres: [grp], catalogId: catId, logo: logo, rawName: rawName, group: grp };
                     tMap.set(cId, { meta: mItem, streams: [] }); 
                     tCat.push(mItem);
                 }
@@ -211,9 +215,9 @@ async function parseM3uData(configKey, configObj) {
         
         userCaches.set(configKey, { status: 'ready', channelMap: tMap, logoTracker: logoTrack, catalogItems: tCat, uniqueGroups: groups, epgData: tEpg, lastUpdated: Date.now() });
         
+        // Trigger async background AI process if toggle enabled
         if (configObj.ai && dirtyChannels.length > 0) {
-            const uniqueDirty = [...new Set(dirtyChannels)];
-            startAiQueue(uniqueDirty, configKey).catch(err => console.error("[AI Queue Error]", err));
+            startAiQueue(dirtyChannels, configKey).catch(err => console.error("[AI Queue Error]", err));
         }
 
     } catch(e) {
@@ -299,15 +303,16 @@ async function parseXtreamData(configKey, configObj) {
 
             const countryScopeKey = countryPrefix ? countryPrefix.replace(/[^A-Z]/g, '').toLowerCase() : 'global';
             const baseCleanName = cName.replace(/[^a-z0-9]/g, "") || "unknown";
-            let cId = `${countryScopeKey}_${baseCleanName}`;
+            
+            // Keep the prefix: cId always starts with iptv:
+            let cId = `iptv:${countryScopeKey}_${baseCleanName}`;
 
-            // [AI ASSIST OVERRIDE - DEDUPLICATION LAYER]
-            if (globalAiCache.has(rawName)) {
-                cId = globalAiCache.get(rawName);
+            // Check Supabase override DB
+            const dbMapping = await getOverride(rawName);
+            if (dbMapping && dbMapping.confidence >= 0.5) {
+                cId = dbMapping.canonical_id;
             } else {
-                if (rawName.toLowerCase().includes('backup') || rawName.toLowerCase().includes('alt') || baseCleanName === 'unknown') {
-                    dirtyChannels.push(rawName);
-                }
+                dirtyChannels.push({ rawName, baseCleanName, cId });
             }
 
             if (stream.epg_channel_id) epgMap.set(stream.epg_channel_id.toLowerCase().trim(), cId);
@@ -315,16 +320,6 @@ async function parseXtreamData(configKey, configObj) {
             epgMap.set(cId, cId);
 
             let finalLogo = stream.stream_icon || '';
-            let isPremiumLogo = false;
-            
-            const premiumAssets = await upgradeChannelAssets(rawName, configObj);
-            if (premiumAssets) {
-                if (premiumAssets.logo) {
-                    finalLogo = premiumAssets.logo; 
-                    isPremiumLogo = true;
-                }
-                if (premiumAssets.id) epgMap.set(premiumAssets.id.toLowerCase(), cId); 
-            }
 
             logoTrack.set(cId, { url: finalLogo, name: cName });
 
@@ -332,7 +327,7 @@ async function parseXtreamData(configKey, configObj) {
             groups.add(finalGrp);
 
             if (!tMap.has(cId)) {
-                const mItem = { id: `iptv:${cId}`, type: 'tv', name: cName.replace(/\b\w/g, c => c.toUpperCase()), genres: [finalGrp], catalogId: catId, logo: finalLogo, isPremiumLogo: isPremiumLogo, rawName: rawName, group: finalGrp };
+                const mItem = { id: cId, type: 'tv', name: cName.replace(/\b\w/g, c => c.toUpperCase()), genres: [finalGrp], catalogId: catId, logo: finalLogo, rawName: rawName, group: finalGrp };
                 tMap.set(cId, { meta: mItem, streams: [] });
                 tCat.push(mItem);
             }
@@ -349,8 +344,7 @@ async function parseXtreamData(configKey, configObj) {
         console.log(`[Xtream Engine] Categorized and loaded ${tCat.length} streams inside memory.`);
 
         if (configObj.ai && dirtyChannels.length > 0) {
-            const uniqueDirty = [...new Set(dirtyChannels)];
-            startAiQueue(uniqueDirty, configKey).catch(err => console.error("[AI Queue Error]", err));
+            startAiQueue(dirtyChannels, configKey).catch(err => console.error("[AI Queue Error]", err));
         }
 
     } catch(e) {
@@ -362,52 +356,81 @@ async function parseXtreamData(configKey, configObj) {
 async function handleXmltvEpg(epgUrl, tMap, epgMap) {
     const tEpg = {};
     if (!epgUrl) return tEpg;
-    try {
-        const epgRes = await axios({ method: 'get', url: epgUrl, responseType: 'stream', headers: { 'Accept-Encoding': 'gzip,deflate', 'User-Agent': 'Mozilla/5.0' }, timeout: 60000 });
-        let rawStream = epgRes.data;
-        
-        const firstChunk = await new Promise((resolve) => { rawStream.once('data', (chunk) => resolve(chunk)); });
-        let finalizedStream;
-        if (firstChunk && firstChunk[0] === 0x1f && firstChunk[1] === 0x8b) {
-            const combined = Readable.from((async function* () { yield firstChunk; for await (const chunk of rawStream) { yield chunk; } })());
-            finalizedStream = combined.pipe(zlib.createGunzip());
-        } else {
-            finalizedStream = Readable.from((async function* () { if (firstChunk) yield firstChunk; for await (const chunk of rawStream) { yield chunk; } })());
-        }
-
-        const rlEpg = readline.createInterface({ input: finalizedStream, crlfDelay: Infinity });
-        let inProg = false, currP = "";
-        
-        for await (const line of rlEpg) {
-            const lowerLine = line.toLowerCase();
-            if (lowerLine.includes('<programme')) { inProg = true; currP = line; } 
-            else if (inProg) { currP += "\n" + line; }
+    return new Promise(async (resolve) => {
+        try {
+            const epgRes = await axios({ method: 'get', url: epgUrl, responseType: 'stream', headers: { 'Accept-Encoding': 'gzip,deflate', 'User-Agent': 'Mozilla/5.0' }, timeout: 60000 });
+            let rawStream = epgRes.data;
             
-            if (inProg && lowerLine.includes('</programme>')) {
-                inProg = false;
-                const chMatch = currP.match(/channel=["']([^"']+)["']/i);
-                if (chMatch) {
-                    const rawEpgId = chMatch[1].toLowerCase().trim();
-                    const mId = epgMap.get(rawEpgId) || epgMap.get(rawEpgId.replace(/\s+/g, ''));
-                    
-                    if (mId && tMap.has(mId)) {
-                        const startMatch = currP.match(/start=["']([^"']+)["']/), stopMatch = currP.match(/stop=["']([^"']+)["']/);
-                        const titleMatch = currP.match(/<title[^>]*>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/i);
-                        const descMatch = currP.match(/<desc[^>]*>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/desc>/i);
-                        
-                        if (!tEpg[mId]) tEpg[mId] = [];
-                        tEpg[mId].push({ 
-                            start: parseXMLDate(startMatch ? startMatch[1] : ""), 
-                            stop: parseXMLDate(stopMatch ? stopMatch[1] : ""), 
-                            title: titleMatch ? titleMatch[1].trim() : "Unknown", 
-                            desc: descMatch ? descMatch[1].trim() : "" 
-                        });
+            const firstChunk = await new Promise((resChunk) => { rawStream.once('data', (chunk) => resChunk(chunk)); });
+            let finalizedStream;
+            if (firstChunk && firstChunk[0] === 0x1f && firstChunk[1] === 0x8b) {
+                const combined = Readable.from((async function* () { yield firstChunk; for await (const chunk of rawStream) { yield chunk; } })());
+                finalizedStream = combined.pipe(zlib.createGunzip());
+            } else {
+                finalizedStream = Readable.from((async function* () { if (firstChunk) yield firstChunk; for await (const chunk of rawStream) { yield chunk; } })());
+            }
+
+            // Using sax parser streaming to parse XML memory-safely
+            const saxStream = sax.createStream(true, { trim: true, normalize: true });
+            let currentProgramme = null;
+            let currentTag = null;
+            let currentText = '';
+
+            saxStream.on('opentag', (node) => {
+                if (node.name === 'programme') {
+                    currentProgramme = {
+                        start: parseXMLDate(node.attributes.start || ""),
+                        stop: parseXMLDate(node.attributes.stop || ""),
+                        channel: node.attributes.channel ? node.attributes.channel.toLowerCase().trim() : ""
+                    };
+                }
+                currentTag = node.name;
+                currentText = '';
+            });
+
+            saxStream.on('text', (text) => {
+                if (currentProgramme) {
+                    currentText += text;
+                }
+            });
+
+            saxStream.on('closetag', (tagName) => {
+                if (currentProgramme) {
+                    if (tagName === 'title') {
+                        currentProgramme.title = currentText.trim();
+                    } else if (tagName === 'desc') {
+                        currentProgramme.desc = currentText.trim();
+                    } else if (tagName === 'programme') {
+                        const mId = epgMap.get(currentProgramme.channel) || epgMap.get(currentProgramme.channel.replace(/\s+/g, ''));
+                        if (mId && tMap.has(mId)) {
+                            if (!tEpg[mId]) tEpg[mId] = [];
+                            tEpg[mId].push({
+                                start: currentProgramme.start,
+                                stop: currentProgramme.stop,
+                                title: currentProgramme.title || "Unknown",
+                                desc: currentProgramme.desc || ""
+                            });
+                        }
+                        currentProgramme = null;
                     }
                 }
-            }
+            });
+
+            saxStream.on('end', () => {
+                resolve(tEpg);
+            });
+
+            saxStream.on('error', (err) => {
+                console.error('[EPG SAX Error]', err.message);
+                resolve(tEpg);
+            });
+
+            finalizedStream.pipe(saxStream);
+        } catch(e) { 
+            console.error("EPG Error", e.message); 
+            resolve(tEpg);
         }
-    } catch(e) { console.error("EPG Error", e.message); }
-    return tEpg;
+    });
 }
 
 function getEpgText(chKey, epgData, offsetHours = 0) {
@@ -427,4 +450,4 @@ function getEpgText(chKey, epgData, offsetHours = 0) {
     return text;
 }
 
-module.exports = { streamFetchIPTV, getEpgText, userCaches };
+module.exports = { streamFetchIPTV, getEpgText, userCaches, getUserCache };

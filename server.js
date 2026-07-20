@@ -3,7 +3,6 @@ const cors = require('cors');
 const axios = require('axios');
 const { streamFetchIPTV, getEpgText, userCaches } = require('./iptvParser');
 const { getPremiumPoster } = require('./imageEngine');
-const { syncPremiumEpgToSupabase } = require('./universalEpg');
 
 const app = express();
 app.use(cors());
