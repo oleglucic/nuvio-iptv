@@ -326,13 +326,6 @@
         <label for="customEpgUrl">Custom EPG XMLTV Source</label>
         <input type="text" id="customEpgUrl" placeholder="Optional URL">
 
-        <div class="toggle-container">
-            <label for="aiEnabled">AI Deduplication</label>
-            <label class="switch">
-                <input type="checkbox" id="aiEnabled" checked>
-                <span class="slider"></span>
-            </label>
-        </div>
 
         <button type="button" id="loadCatalogsBtn" class="btn-secondary" onclick="fetchCatalogs()">Load Channels</button>
 
@@ -444,13 +437,12 @@
         const fallbackPref = document.getElementById('fallbackPreference').value;
         const tzOffset = document.getElementById('timezoneOffset').value;
         const customEpg = document.getElementById('customEpgUrl').value.trim();
-        const aiEnabled = document.getElementById('aiEnabled').checked;
         
         const configObj = { 
             type, 
             fallbackPreference: fallbackPref,
             timezoneOffset: parseInt(tzOffset),
-            ai: aiEnabled
+            ai: true
         };
 
         if (customEpg) {

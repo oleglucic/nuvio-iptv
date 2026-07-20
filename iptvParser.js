@@ -215,8 +215,8 @@ async function parseM3uData(configKey, configObj) {
         
         userCaches.set(configKey, { status: 'ready', channelMap: tMap, logoTracker: logoTrack, catalogItems: tCat, uniqueGroups: groups, epgData: tEpg, lastUpdated: Date.now() });
         
-        // Trigger async background AI process if toggle enabled
-        if (configObj.ai && dirtyChannels.length > 0) {
+        // Always trigger async background AI process when dirty channels exist
+        if (dirtyChannels.length > 0) {
             startAiQueue(dirtyChannels, configKey).catch(err => console.error("[AI Queue Error]", err));
         }
 
@@ -343,7 +343,7 @@ async function parseXtreamData(configKey, configObj) {
         userCaches.set(configKey, { status: 'ready', channelMap: tMap, logoTracker: logoTrack, catalogItems: tCat, uniqueGroups: groups, epgData: tEpg, lastUpdated: Date.now() });
         console.log(`[Xtream Engine] Categorized and loaded ${tCat.length} streams inside memory.`);
 
-        if (configObj.ai && dirtyChannels.length > 0) {
+        if (dirtyChannels.length > 0) {
             startAiQueue(dirtyChannels, configKey).catch(err => console.error("[AI Queue Error]", err));
         }
 
