@@ -213,7 +213,7 @@ async function parseM3uData(configKey, configObj) {
                 }
                 
                 const sInfo = parseStreamInfo(rawName);
-                tMap.get(cId).streams.push({ name: sInfo.name, title: sInfo.title, url: t, score: sInfo.score }); 
+                tMap.get(cId).streams.push({ name: sInfo.name, title: sInfo.title, url: t, score: sInfo.score, groupTags: groupTags }); 
                 cItem = null;
             }
         }
@@ -350,7 +350,7 @@ async function parseXtreamData(configKey, configObj) {
             const sInfo = parseStreamInfo(rawName);
             const liveStreamUrl = `${baseUrl}/live/${user}/${pass}/${stream.stream_id}.ts`;
             
-            tMap.get(cId).streams.push({ name: sInfo.name, title: sInfo.title, url: liveStreamUrl, score: sInfo.score });
+            tMap.get(cId).streams.push({ name: sInfo.name, title: sInfo.title, url: liveStreamUrl, score: sInfo.score, groupTags: groupTags });
         }
 
         const tEpg = await handleXmltvEpg(epg, tMap, epgMap);

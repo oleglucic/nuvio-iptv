@@ -163,7 +163,8 @@ async function handleCatalog(req, res) {
         const engineImage = `${rootUrl}/${config}/poster/${chKey}.png?t=${ud.lastUpdated}`;
         const passedThroughLogo = channel.meta.logo || engineImage;
         const epgDescription = getEpgText(chKey, ud.epgData, configObj.timezoneOffset || 0);
-        const fullDescription = channel.meta.groupTags ? `🎬 ${channel.meta.groupTags}\n\n${epgDescription}` : epgDescription;
+        const aggregatedTags = [...new Set(channel.streams.flatMap(s => s.groupTags ? s.groupTags.split(" • ") : []))].join(" • ");
+        const fullDescription = aggregatedTags && aggregatedTags.length > 0 ? `🎬 ${aggregatedTags}\n\n${epgDescription}` : epgDescription;
         metas.push({
             id: channel.meta.id,
             type: 'tv',
@@ -196,7 +197,8 @@ app.get('/:config/meta/:type/:id.json', async (req, res) => {
     const engineImage = `${rootUrl}/${config}/poster/${encodeURIComponent(id)}.png?t=${ud.lastUpdated}`;
     const passedThroughLogo = channel.meta.logo || engineImage;
     const epgDescription = getEpgText(id, ud.epgData, configObj ? configObj.timezoneOffset : 0);
-    const fullDescription = channel.meta.groupTags ? `🎬 ${channel.meta.groupTags}\n\n${epgDescription}` : epgDescription;
+    const aggregatedTags = [...new Set(channel.streams.flatMap(s => s.groupTags ? s.groupTags.split(" • ") : []))].join(" • ");
+    const fullDescription = aggregatedTags && aggregatedTags.length > 0 ? `🎬 ${aggregatedTags}\n\n${epgDescription}` : epgDescription;
 
     res.json({
         meta: {
@@ -226,7 +228,7 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
         .sort((a, b) => b.score - a.score)
         .map(stream => ({
             name: stream.name,
-            title: stream.title,
+            title: stream.groupTags ? `${stream.title} • ${stream.groupTags}` : stream.title,
             url: stream.url
         }));
 
