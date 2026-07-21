@@ -71,7 +71,7 @@ async function ensureCache(config, configObj) {
 }
 
 // Stremio Manifest Router
-app.get('/:config/manifest.json', (req, res) => {
+app.get('/manifest.json', (req, res) => {
     res.json({
         id: 'org.iptvo.premium',
         version: '1.0.0',
@@ -89,8 +89,8 @@ app.get('/:config/manifest.json', (req, res) => {
 });
 
 // Stremio Catalog Router
-app.get('/:config/catalog/:type/:id.json', async (req, res) => {
-    const config = req.params.config;
+app.get('/catalog/:type/:id.json', async (req, res) => {
+    const config = req.query.config;
     const configObj = extractConfig(req);
     if (!configObj) return res.json({ metas: [] });
 
@@ -125,8 +125,8 @@ app.get('/:config/catalog/:type/:id.json', async (req, res) => {
 });
 
 // Stremio Meta Information Router
-app.get('/:config/meta/:type/:id.json', async (req, res) => {
-    const config = req.params.config;
+app.get('/meta/:type/:id.json', async (req, res) => {
+    const config = req.query.config;
     const id = req.params.id; // Keep full id including iptv: prefix
     const configObj = extractConfig(req);
 
@@ -154,8 +154,8 @@ app.get('/:config/meta/:type/:id.json', async (req, res) => {
 });
 
 // Stremio Stream Handler Routing
-app.get('/:config/stream/:type/:id.json', async (req, res) => {
-    const config = req.params.config;
+app.get('/stream/:type/:id.json', async (req, res) => {
+    const config = req.query.config;
     const id = req.params.id; // Keep full id including iptv: prefix
     const configObj = extractConfig(req);
 
@@ -175,8 +175,8 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
 });
 
 // Fallback Canvas Image Generator Route
-app.get('/:config/poster/:id.png', async (req, res) => {
-    const config = req.params.config;
+app.get('/poster/:id.png', async (req, res) => {
+    const config = req.query.config;
     const id = decodeURIComponent(req.params.id); // Keep full id including iptv: prefix
     const configObj = extractConfig(req);
 
