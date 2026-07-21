@@ -4,7 +4,7 @@ const zlib = require('zlib');
 const sax = require('sax');
 const { Readable } = require('stream');
 const { startAiQueue, globalAiCache } = require('./aiCurator'); 
-const { getOverride } = require('./db');
+const { getOverride, getAllOverrides } = require('./db');
 
 const userCaches = new Map();
 const MAX_CACHE_AGE = 60 * 60 * 1000; // 1 hour
@@ -110,6 +110,9 @@ async function streamFetchIPTV(configKey, configObj) {
 async function parseM3uData(configKey, configObj) {
     const __t0 = Date.now();
     console.log(`[parseM3uData] START for configKey=${configKey ? configKey.substring(0,12) : 'null'}...`);
+    const __overridesRows = await getAllOverrides();
+    const overridesMap = new Map(__overridesRows.map(o => [o.raw_name, { canonical_id: o.canonical_id, confidence: parseFloat(o.confidence) }]));
+    console.log(`[parser] Preloaded ${overridesMap.size} override mappings from DB`);
     try {
         if (!configObj) throw new Error("Configuration context object is missing.");
         const m3uTargetUrl = configObj.m3uUrl || configObj.m3u;
@@ -177,7 +180,7 @@ async function parseM3uData(configKey, configObj) {
                 let cId = `${countryScopeKey}_${baseCleanName}`;
                 
                 // 1. Check Supabase Override DB first
-                const dbMapping = await getOverride(rawName);
+                const dbMapping = overridesMap.get(rawName) || null;
                 if (dbMapping && dbMapping.confidence >= 0.5) {
                     cId = dbMapping.canonical_id;
                 } else {
@@ -231,6 +234,9 @@ async function parseM3uData(configKey, configObj) {
 async function parseXtreamData(configKey, configObj) {
     const __t0 = Date.now();
     console.log(`[parseXtreamData] START for configKey=${configKey ? configKey.substring(0,12) : 'null'}...`);
+    const __overridesRows = await getAllOverrides();
+    const overridesMap = new Map(__overridesRows.map(o => [o.raw_name, { canonical_id: o.canonical_id, confidence: parseFloat(o.confidence) }]));
+    console.log(`[parser] Preloaded ${overridesMap.size} override mappings from DB`);
     try {
         if (!configObj) throw new Error("Configuration mapping context payload is missing.");
         
@@ -313,7 +319,7 @@ async function parseXtreamData(configKey, configObj) {
             let cId = `${countryScopeKey}_${baseCleanName}`;
 
             // Check Supabase override DB
-            const dbMapping = await getOverride(rawName);
+            const dbMapping = overridesMap.get(rawName) || null;
             if (dbMapping && dbMapping.confidence >= 0.5) {
                 cId = dbMapping.canonical_id;
             } else {
