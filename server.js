@@ -64,14 +64,39 @@ function extractConfig(req) {
 async function ensureCache(config, configObj) {
     if (!configObj) return null;
     let cached = userCaches.get(config);
-    if (!cached || cached.status === 'error' ||
-        (cached.status === 'ready' && (Date.now() - cached.lastUpdated > 60 * 60 * 1000))) {
-        streamFetchIPTV(config, configObj).catch(e => console.error('[ensureCache] fetch failed:', e.message));
-        cached = userCaches.get(config);
+
+    // Total cache miss (cold start): kick off the fetch and wait briefly for it,
+    // so we don't return an empty catalog when the parse would finish in time anyway.
+    if (!cached) {
+        const fetchPromise = streamFetchIPTV(config, configObj).catch(e => console.error('[ensureCache] fetch failed:', e.message));
+        const timeoutPromise = new Promise(resolve => setTimeout(resolve, 6000));
+        await Promise.race([fetchPromise, timeoutPromise]);
+        return userCaches.get(config);
     }
+
+    // Already loading (e.g. triggered by a parallel request): wait a bit for it too.
+    if (cached.status === 'loading') {
+        const pollPromise = (async () => {
+            while (userCaches.get(config) && userCaches.get(config).status === 'loading') {
+                await new Promise(r => setTimeout(r, 300));
+            }
+        })();
+        const timeoutPromise = new Promise(resolve => setTimeout(resolve, 6000));
+        await Promise.race([pollPromise, timeoutPromise]);
+        return userCaches.get(config);
+    }
+
+    // Ready but stale, or errored previously: refresh in the background, serve what we have now.
+    if (cached.status === 'error' ||
+        (cached.status === 'ready' && (Date.now() - cached.lastUpdated > 60 * 60 * 1000))) {
+        streamFetchIPTV(config, configObj).catch(e => console.error('[ensureCache] refresh failed:', e.message));
+    }
+
     return cached;
 }
 
+
+app.get('/health', (req, res) => res.json({ status: 'ok', time: Date.now() }));
 // Stremio Manifest Router
 app.get('/:config/manifest.json', async (req, res) => {
     const config = req.params.config;
@@ -103,26 +128,27 @@ app.get('/:config/manifest.json', async (req, res) => {
 });
 
 // Stremio Catalog Router
-app.get('/:config/catalog/:type/:id.json', async (req, res) => {
+async function handleCatalog(req, res) {
     const config = req.params.config;
     const configObj = extractConfig(req);
     if (!configObj) return res.json({ metas: [] });
-
     const ud = await ensureCache(config, configObj);
-
       if (!ud || !ud.channelMap) return res.json({ metas: [] });
-
     const rootUrl = `${req.protocol}://${req.get('host')}`;
-    const selectedGenre = req.query.genre; 
-    const metas = [];
 
+    let selectedGenre = null;
+    if (req.params.extra) {
+        const decoded = decodeURIComponent(req.params.extra);
+        const match = decoded.match(/(?:^|&)genre=([^&]+)/);
+        if (match) selectedGenre = decodeURIComponent(match[1]);
+    }
+
+    const metas = [];
     for (const [chKey, channel] of ud.channelMap.entries()) {
         if (selectedGenre && channel.meta.group !== selectedGenre) continue;
-
         const engineImage = `${rootUrl}/${config}/poster/${chKey}.png?t=${ud.lastUpdated}`;
         const passedThroughLogo = channel.meta.logo || engineImage;
         const epgDescription = getEpgText(chKey, ud.epgData, configObj.timezoneOffset || 0);
-
         metas.push({
             id: channel.meta.id,
             type: 'tv',
@@ -131,11 +157,13 @@ app.get('/:config/catalog/:type/:id.json', async (req, res) => {
             background: engineImage,
             logo: passedThroughLogo,
             description: epgDescription,
-            genres: [channel.meta.group] 
+            genres: [channel.meta.group]
         });
     }
     res.json({ metas });
-});
+}
+app.get('/:config/catalog/:type/:id.json', handleCatalog);
+app.get('/:config/catalog/:type/:id/:extra.json', handleCatalog);
 
 // Stremio Meta Information Router
 app.get('/:config/meta/:type/:id.json', async (req, res) => {
