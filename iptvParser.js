@@ -108,6 +108,8 @@ async function streamFetchIPTV(configKey, configObj) {
 }
 
 async function parseM3uData(configKey, configObj) {
+    const __t0 = Date.now();
+    console.log(`[parseM3uData] START for configKey=${configKey ? configKey.substring(0,12) : 'null'}...`);
     try {
         if (!configObj) throw new Error("Configuration context object is missing.");
         const m3uTargetUrl = configObj.m3uUrl || configObj.m3u;
@@ -214,6 +216,7 @@ async function parseM3uData(configKey, configObj) {
         const tEpg = await handleXmltvEpg(configObj.epg, tMap, epgMap);
         
         userCaches.set(configKey, { status: 'ready', channelMap: tMap, logoTracker: logoTrack, catalogItems: tCat, uniqueGroups: groups, epgData: tEpg, lastUpdated: Date.now() });
+        console.log(`[parser] READY configKey=${configKey ? configKey.substring(0,12) : 'null'}... channels=${tMap.size} groups=${groups.size} elapsed=${Date.now() - __t0}ms`);
         
         // Always trigger async background AI process when dirty channels exist
         if (dirtyChannels.length > 0) {
@@ -221,11 +224,13 @@ async function parseM3uData(configKey, configObj) {
         }
 
     } catch(e) {
-        userCaches.set(configKey, { status: 'error', message: e.message });
+        console.error(`[parser] ERROR configKey=${configKey ? configKey.substring(0,12) : 'null'}... message=${e.message} elapsed=${Date.now() - __t0}ms`); userCaches.set(configKey, { status: 'error', message: e.message });
     }
 }
 
 async function parseXtreamData(configKey, configObj) {
+    const __t0 = Date.now();
+    console.log(`[parseXtreamData] START for configKey=${configKey ? configKey.substring(0,12) : 'null'}...`);
     try {
         if (!configObj) throw new Error("Configuration mapping context payload is missing.");
         
@@ -341,6 +346,7 @@ async function parseXtreamData(configKey, configObj) {
         const tEpg = await handleXmltvEpg(epg, tMap, epgMap);
         
         userCaches.set(configKey, { status: 'ready', channelMap: tMap, logoTracker: logoTrack, catalogItems: tCat, uniqueGroups: groups, epgData: tEpg, lastUpdated: Date.now() });
+        console.log(`[parser] READY configKey=${configKey ? configKey.substring(0,12) : 'null'}... channels=${tMap.size} groups=${groups.size} elapsed=${Date.now() - __t0}ms`);
         console.log(`[Xtream Engine] Categorized and loaded ${tCat.length} streams inside memory.`);
 
         if (dirtyChannels.length > 0) {
@@ -349,7 +355,7 @@ async function parseXtreamData(configKey, configObj) {
 
     } catch(e) {
         console.error("[Xtream Engine Error]", e.message);
-        userCaches.set(configKey, { status: 'error', message: e.message });
+        console.error(`[parser] ERROR configKey=${configKey ? configKey.substring(0,12) : 'null'}... message=${e.message} elapsed=${Date.now() - __t0}ms`); userCaches.set(configKey, { status: 'error', message: e.message });
     }
 }
 

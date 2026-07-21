@@ -65,8 +65,10 @@ function extractConfig(req) {
 
 // Ensure cache is populated before serving data routes
 async function ensureCache(config, configObj) {
-    if (!configObj) return null;
+    console.log(`[ensureCache] called for config=${config ? config.substring(0,12) : 'null'}... configObj=${!!configObj}`);
+    if (!configObj) { console.log('[ensureCache] no configObj, returning null'); return null; }
     let cached = userCaches.get(config);
+    console.log(`[ensureCache] cache state: ${cached ? cached.status : 'MISSING'}`);
 
     // Total cache miss (cold start): kick off the fetch and wait briefly for it,
     // so we don't return an empty catalog when the parse would finish in time anyway.
@@ -74,7 +76,9 @@ async function ensureCache(config, configObj) {
         const fetchPromise = streamFetchIPTV(config, configObj).catch(e => console.error('[ensureCache] fetch failed:', e.message));
         const timeoutPromise = new Promise(resolve => setTimeout(resolve, 6000));
         await Promise.race([fetchPromise, timeoutPromise]);
-        return userCaches.get(config);
+        const result = userCaches.get(config);
+        console.log(`[ensureCache] cold-start wait finished, status=${result ? result.status : 'STILL MISSING'}, channels=${result && result.channelMap ? result.channelMap.size : 0}`);
+        return result;
     }
 
     // Already loading (e.g. triggered by a parallel request): wait a bit for it too.
@@ -135,9 +139,11 @@ app.get('/:config/manifest.json', async (req, res) => {
 async function handleCatalog(req, res) {
     const config = req.params.config;
     const configObj = extractConfig(req);
-    if (!configObj) return res.json({ metas: [] });
+    console.log(`[handleCatalog] request received, path=${req.path}, configObj parsed=${!!configObj}`);
+    if (!configObj) { console.log('[handleCatalog] extractConfig FAILED - returning empty'); return res.json({ metas: [] }); }
     const ud = await ensureCache(config, configObj);
-      if (!ud || !ud.channelMap) return res.json({ metas: [] });
+      console.log(`[handleCatalog] ensureCache returned status=${ud ? ud.status : 'NULL'}, channelMap size=${ud && ud.channelMap ? ud.channelMap.size : 0}`);
+      if (!ud || !ud.channelMap) { console.log('[handleCatalog] no ud/channelMap - returning empty'); return res.json({ metas: [] }); }
     const rootUrl = `${req.protocol}://${req.get('host')}`;
 
     let selectedGenre = null;
@@ -168,6 +174,7 @@ async function handleCatalog(req, res) {
             genres: [channel.meta.group]
         });
     }
+    console.log(`[handleCatalog] responding with ${metas.length} metas (genre=${selectedGenre || 'none'}, search=${selectedSearch || 'none'})`);
     res.json({ metas });
 }
 app.get('/:config/catalog/:type/:id.json', handleCatalog);
