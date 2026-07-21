@@ -13,6 +13,9 @@ app.use(express.json());
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'dashboard.html'));
 });
+app.get('/:config/configure', (req, res) => {
+    res.sendFile(path.join(__dirname, 'dashboard.html'));
+});
 
 // Shallow Category Discovery Route
 app.post('/api/get-groups', async (req, res) => {
@@ -118,11 +121,12 @@ app.get('/:config/manifest.json', async (req, res) => {
         description: 'AI Curation Stack & Intelligent Catalog Filter Layer',
         resources: ['catalog', 'meta', 'stream'],
         types: ['tv'],
+        behaviorHints: { configurable: true, configurationRequired: false },
         catalogs: [{
             type: 'tv',
             id: 'iptvo_live',
             name: 'IPTVo Live TV',
-            extra: [{ name: 'genre', isRequired: false, options: genreOptions }]
+            extra: [{ name: 'genre', isRequired: false, options: genreOptions }, { name: 'search', isRequired: false }]
         }]
     });
 });
@@ -137,15 +141,19 @@ async function handleCatalog(req, res) {
     const rootUrl = `${req.protocol}://${req.get('host')}`;
 
     let selectedGenre = null;
+    let selectedSearch = null;
     if (req.params.extra) {
         const decoded = decodeURIComponent(req.params.extra);
-        const match = decoded.match(/(?:^|&)genre=([^&]+)/);
-        if (match) selectedGenre = decodeURIComponent(match[1]);
+        const genreMatch = decoded.match(/(?:^|&)genre=([^&]+)/);
+        if (genreMatch) selectedGenre = decodeURIComponent(genreMatch[1]);
+        const searchMatch = decoded.match(/(?:^|&)search=([^&]+)/);
+        if (searchMatch) selectedSearch = decodeURIComponent(searchMatch[1]).toLowerCase();
     }
 
     const metas = [];
     for (const [chKey, channel] of ud.channelMap.entries()) {
         if (selectedGenre && channel.meta.group !== selectedGenre) continue;
+        if (selectedSearch && !channel.meta.name.toLowerCase().includes(selectedSearch)) continue;
         const engineImage = `${rootUrl}/${config}/poster/${chKey}.png?t=${ud.lastUpdated}`;
         const passedThroughLogo = channel.meta.logo || engineImage;
         const epgDescription = getEpgText(chKey, ud.epgData, configObj.timezoneOffset || 0);

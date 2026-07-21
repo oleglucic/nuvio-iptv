@@ -355,10 +355,45 @@
     };
 
     function toggleFormInputs() {
-        const type = document.getElementById('providerType').value;
-        document.getElementById('xtreamFields').style.display = type === 'xtream' ? 'block' : 'none';
-        document.getElementById('m3uFields').style.display = type === 'm3u' ? 'block' : 'none';
+    const type = document.getElementById('providerType').value;
+    document.getElementById('xtreamFields').style.display = type === 'xtream' ? 'block' : 'none';
+    document.getElementById('m3uFields').style.display = type === 'm3u' ? 'block' : 'none';
+}
+
+function decodeConfigFromPath() {
+    const parts = window.location.pathname.split('/').filter(Boolean);
+    if (parts.length < 2 || parts[parts.length - 1] !== 'configure') return null;
+    let b64 = parts[parts.length - 2];
+    b64 = b64.replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4 !== 0) b64 += '=';
+    try {
+        const decoded = decodeURIComponent(escape(atob(b64)));
+        return JSON.parse(decoded);
+    } catch (e) {
+        console.error('Failed to decode existing config', e);
+        return null;
     }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const cfg = decodeConfigFromPath();
+    if (!cfg) return;
+
+    document.getElementById('providerType').value = cfg.type || 'm3u';
+    toggleFormInputs();
+
+    if (cfg.type === 'xtream') {
+        document.getElementById('xtreamUrl').value = cfg.xtreamUrl || '';
+        document.getElementById('username').value = cfg.username || '';
+        document.getElementById('password').value = cfg.password || '';
+    } else {
+        document.getElementById('m3uUrl').value = cfg.m3uUrl || '';
+    }
+
+    if (cfg.fallbackPreference) document.getElementById('fallbackPreference').value = cfg.fallbackPreference;
+    if (cfg.timezoneOffset != null) document.getElementById('timezoneOffset').value = String(cfg.timezoneOffset);
+    if (cfg.epg) document.getElementById('customEpgUrl').value = cfg.epg;
+});
 
     async function fetchCatalogs() {
         const btn = document.getElementById('loadCatalogsBtn');
