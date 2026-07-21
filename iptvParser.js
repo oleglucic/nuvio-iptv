@@ -171,8 +171,8 @@ async function parseM3uData(configKey, configObj) {
                 const countryScopeKey = countryPrefix ? countryPrefix.replace(/[^A-Z]/g, '').toLowerCase() : 'global';
                 const baseCleanName = cName.replace(/[^a-z0-9]/g, "") || "unknown";
                 
-                // Keep the prefix: cId always starts with iptv:
-                let cId = `iptv:${countryScopeKey}_${baseCleanName}`;
+                // No 'iptv:' prefix - colons in IDs can break client URL parsing
+                let cId = `${countryScopeKey}_${baseCleanName}`;
                 
                 // 1. Check Supabase Override DB first
                 const dbMapping = await getOverride(rawName);
@@ -304,8 +304,8 @@ async function parseXtreamData(configKey, configObj) {
             const countryScopeKey = countryPrefix ? countryPrefix.replace(/[^A-Z]/g, '').toLowerCase() : 'global';
             const baseCleanName = cName.replace(/[^a-z0-9]/g, "") || "unknown";
             
-            // Keep the prefix: cId always starts with iptv:
-            let cId = `iptv:${countryScopeKey}_${baseCleanName}`;
+            // No 'iptv:' prefix - colons in IDs can break client URL parsing
+            let cId = `${countryScopeKey}_${baseCleanName}`;
 
             // Check Supabase override DB
             const dbMapping = await getOverride(rawName);

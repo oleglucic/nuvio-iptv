@@ -468,7 +468,7 @@
         let base64Config = btoa(unescape(encodeURIComponent(JSON.stringify(configObj))));
         base64Config = base64Config.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
         
-        const manifestUrl = `stremio://${window.location.host}/manifest.json?config=${base64Config}`;
+        const manifestUrl = `stremio://${window.location.host}/${base64Config}/manifest.json`;
         
         navigator.clipboard.writeText(manifestUrl).catch(() => {}).finally(() => {
             window.location.href = manifestUrl;
