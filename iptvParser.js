@@ -165,6 +165,8 @@ async function parseM3uData(configKey, configObj) {
                 cleanGrp = cleanGrp.replace(/[-\/|:_\s]+/g, ' ').replace(/\s+/g, ' ').trim().toUpperCase();
                 let finalGrp = countryPrefix + cleanGrp;
                 if (!cleanGrp || cleanGrp.length < 2) finalGrp = rawGrp;
+                const groupTagInfo = parseStreamInfo(rawGrp);
+                const groupTags = groupTagInfo.title !== "Direct Stream" ? groupTagInfo.title : null;
                 
                 let cleanNameStr = normaliseFormat(rawName).toLowerCase();
                 let cName = cleanNameStr.replace(/\b(hd|fhd|uhd|4k|8k|sd|raw|hevc|1080p|1080i|720p|60fps|50fps|h265|vod|dolby|audio|vision|atmos|dv|dovi|ac3|eac3|fps|vip|premium|live|backup|alt|online)\b/gi, ' ');
@@ -197,15 +199,15 @@ async function parseM3uData(configKey, configObj) {
                 let finalLogo = logo ? logo[1] : '';
 
                 logoTrack.set(cId, { url: finalLogo, name: cName });
-                cItem = { cId, cName, rawName, logo: finalLogo, grp: finalGrp };
+                cItem = { cId, cName, rawName, logo: finalLogo, grp: finalGrp, groupTags };
 
             } else if (t.startsWith('http') && cItem) {
-                const { cId, cName, rawName, logo, grp } = cItem;
+                const { cId, cName, rawName, logo, grp, groupTags } = cItem;
                 const catId = `iptv_${grp.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase()}`;
                 groups.add(grp);
                 
                 if (!tMap.has(cId)) {
-                    const mItem = { id: cId, type: 'tv', name: cName.replace(/\b\w/g, c => c.toUpperCase()), genres: [grp], catalogId: catId, logo: logo, rawName: rawName, group: grp };
+                    const mItem = { id: cId, type: 'tv', name: cName.replace(/\b\w/g, c => c.toUpperCase()), genres: [grp], catalogId: catId, logo: logo, rawName: rawName, group: grp, groupTags: groupTags };
                     tMap.set(cId, { meta: mItem, streams: [] }); 
                     tCat.push(mItem);
                 }
@@ -304,6 +306,8 @@ async function parseXtreamData(configKey, configObj) {
             cleanGrp = cleanGrp.replace(/[-\/|:_\s]+/g, ' ').replace(/\s+/g, ' ').trim().toUpperCase();
             let finalGrp = countryPrefix + cleanGrp;
             if (!cleanGrp || cleanGrp.length < 2) finalGrp = rawGrp;
+            const groupTagInfo = parseStreamInfo(rawGrp);
+            const groupTags = groupTagInfo.title !== "Direct Stream" ? groupTagInfo.title : null;
 
             let cleanNameStr = normaliseFormat(rawName).toLowerCase();
             let cName = cleanNameStr.replace(/\b(hd|fhd|uhd|4k|8k|sd|raw|hevc|1080p|1080i|720p|60fps|50fps|h265|vod|dolby|audio|vision|atmos|dv|dovi|ac3|eac3|fps|vip|premium|live|backup|alt|online)\b/gi, ' ');
@@ -338,7 +342,7 @@ async function parseXtreamData(configKey, configObj) {
             groups.add(finalGrp);
 
             if (!tMap.has(cId)) {
-                const mItem = { id: cId, type: 'tv', name: cName.replace(/\b\w/g, c => c.toUpperCase()), genres: [finalGrp], catalogId: catId, logo: finalLogo, rawName: rawName, group: finalGrp };
+                const mItem = { id: cId, type: 'tv', name: cName.replace(/\b\w/g, c => c.toUpperCase()), genres: [finalGrp], catalogId: catId, logo: finalLogo, rawName: rawName, group: finalGrp, groupTags: groupTags };
                 tMap.set(cId, { meta: mItem, streams: [] });
                 tCat.push(mItem);
             }
