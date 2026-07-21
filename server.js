@@ -163,7 +163,7 @@ async function handleCatalog(req, res) {
         const engineImage = `${rootUrl}/${config}/poster/${chKey}.png?t=${ud.lastUpdated}`;
         const passedThroughLogo = channel.meta.logo || engineImage;
         const epgDescription = getEpgText(chKey, ud.epgData, configObj.timezoneOffset || 0);
-        const aggregatedTags = [...new Set(channel.streams.flatMap(s => s.groupTags ? s.groupTags.split(" • ") : []))].join(" • ");
+        const aggregatedTags = [...new Set(channel.streams.flatMap(s => [...(s.groupTags ? s.groupTags.split(" • ") : []), ...((s.title && s.title !== "Direct Stream") ? s.title.split(" • ") : [])]))].join(" • ");
         const fullDescription = aggregatedTags && aggregatedTags.length > 0 ? `🎬 ${aggregatedTags}\n\n${epgDescription}` : epgDescription;
         metas.push({
             id: channel.meta.id,
@@ -197,7 +197,7 @@ app.get('/:config/meta/:type/:id.json', async (req, res) => {
     const engineImage = `${rootUrl}/${config}/poster/${encodeURIComponent(id)}.png?t=${ud.lastUpdated}`;
     const passedThroughLogo = channel.meta.logo || engineImage;
     const epgDescription = getEpgText(id, ud.epgData, configObj ? configObj.timezoneOffset : 0);
-    const aggregatedTags = [...new Set(channel.streams.flatMap(s => s.groupTags ? s.groupTags.split(" • ") : []))].join(" • ");
+    const aggregatedTags = [...new Set(channel.streams.flatMap(s => [...(s.groupTags ? s.groupTags.split(" • ") : []), ...((s.title && s.title !== "Direct Stream") ? s.title.split(" • ") : [])]))].join(" • ");
     const fullDescription = aggregatedTags && aggregatedTags.length > 0 ? `🎬 ${aggregatedTags}\n\n${epgDescription}` : epgDescription;
 
     res.json({
@@ -228,7 +228,7 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
         .sort((a, b) => b.score - a.score)
         .map(stream => ({
             name: stream.name,
-            title: stream.groupTags ? `${stream.title} • ${stream.groupTags}` : stream.title,
+            title: (() => { const t = new Set(); if (stream.title && stream.title !== 'Direct Stream') stream.title.split(' • ').forEach(x => t.add(x)); if (stream.groupTags) stream.groupTags.split(' • ').forEach(x => t.add(x)); return t.size > 0 ? [...t].join(' • ') : 'Direct Stream'; })(),
             url: stream.url
         }));
 
