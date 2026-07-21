@@ -23,7 +23,7 @@ async function processAiBatch(rawNamesArray) {
     try {
         console.log(`[AI Curator] Resolving duplicates for a batch of ${rawNamesArray.length} channels...`);
         const res = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
-            model: "meta-llama/llama-3.3-70b-instruct:free",
+            model: "openrouter/free",
             messages: [{ role: "user", content: prompt }]
         }, {
             headers: {
