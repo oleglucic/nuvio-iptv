@@ -62,12 +62,14 @@ function extractConfig(req) {
 
 // Ensure cache is populated before serving data routes
 async function ensureCache(config, configObj) {
-    if (!configObj) return;
-    const cached = userCaches.get(config);
+    if (!configObj) return null;
+    let cached = userCaches.get(config);
     if (!cached || cached.status === 'error' ||
         (cached.status === 'ready' && (Date.now() - cached.lastUpdated > 60 * 60 * 1000))) {
-        await streamFetchIPTV(config, configObj);
+        streamFetchIPTV(config, configObj).catch(e => console.error('[ensureCache] fetch failed:', e.message));
+        cached = userCaches.get(config);
     }
+    return cached;
 }
 
 // Stremio Manifest Router
@@ -94,10 +96,9 @@ app.get('/catalog/:type/:id.json', async (req, res) => {
     const configObj = extractConfig(req);
     if (!configObj) return res.json({ metas: [] });
 
-    await streamFetchIPTV(config, configObj);
-    const ud = userCaches.get(config);
+    const ud = await ensureCache(config, configObj);
 
-    if (!ud || !ud.channelMap) return res.json({ metas: [] });
+      if (!ud || !ud.channelMap) return res.json({ metas: [] });
 
     const rootUrl = `${req.protocol}://${req.get('host')}`;
     const selectedGenre = req.query.genre; 
