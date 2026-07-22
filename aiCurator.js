@@ -36,6 +36,14 @@ async function processAiBatch(rawNamesArray) {
         let content = res.data.choices[0].message.content.trim();
         content = content.replace(/```json/g, '').replace(/```/g, ''); 
         
+        const jsonStart = content.indexOf("{");
+        const jsonEnd = content.lastIndexOf("}");
+        if (jsonStart !== -1 && jsonEnd !== -1 && jsonEnd > jsonStart) {
+            content = content.substring(jsonStart, jsonEnd + 1);
+        } else {
+            console.error(`[AI Curator] No JSON object found in response. Raw snippet: ${content.substring(0, 300)}`);
+        }
+
         return JSON.parse(content);
     } catch (e) {
         const status = e.response ? e.response.status : null;
