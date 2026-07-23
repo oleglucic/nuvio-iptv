@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const { streamFetchIPTV, getEpgText, userCaches } = require('./iptvParser');
+const { getCatchupStreams, snapshotAllEpgToHistory } = require('./catchup');
 const { getPremiumPoster } = require('./imageEngine');
 
 const app = express();
@@ -232,7 +233,16 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
             url: stream.url
         }));
 
-    res.json({ streams: streamsToReturn });
+    let catchupEntries = [];
+    if (channel.meta.hasCatchup && channel.streams.length > 0) {
+        try {
+            catchupEntries = await getCatchupStreams(id, channel.streams[0].url, 48);
+        } catch (e) {
+            console.error('[Catchup] Failed to build catchup streams:', e.message);
+        }
+    }
+
+    res.json({ streams: [...streamsToReturn, ...catchupEntries] });
 });
 
 // Fallback Canvas Image Generator Route
@@ -262,4 +272,12 @@ app.get('/:config/poster/:id.png', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
+// Periodically snapshot EPG data into persistent history for catch-up (XMLTV feeds are forward-looking only)
+setInterval(() => {
+    snapshotAllEpgToHistory(userCaches).catch(e => console.error('[Catchup] Snapshot cycle failed:', e.message));
+}, 30 * 60 * 1000);
+setTimeout(() => {
+    snapshotAllEpgToHistory(userCaches).catch(e => console.error('[Catchup] Initial snapshot failed:', e.message));
+}, 2 * 60 * 1000);
+
 app.listen(PORT, () => console.log(`IPTVo Premium Backend operational on port ${PORT}`));

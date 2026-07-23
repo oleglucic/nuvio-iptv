@@ -157,6 +157,57 @@ const adjustConfidence = async (rawName, isSuccess) => {
 };
 const getAllMappings = getAllOverrides;
 
+// ── saveEpgSnapshot ─────────────────────────────────────────────────────
+/**
+ * Persist a batch of EPG programs for a channel, so we build our own
+ * rolling history over time (XMLTV feeds are forward-looking only).
+ * @param {string} channelKey
+ * @param {Array<{title: string, desc: string, start: number, stop: number}>} programs
+ */
+async function saveEpgSnapshot(channelKey, programs) {
+    if (!supabase || !programs || programs.length === 0) return;
+    try {
+        const rows = programs.map(p => ({
+            channel_key: channelKey,
+            title: p.title || null,
+            description: p.desc || null,
+            start_time: p.start,
+            stop_time: p.stop
+        }));
+        const { error } = await supabase
+            .from('epg_history')
+            .upsert(rows, { onConflict: 'channel_key,start_time' });
+        if (error) throw error;
+    } catch (e) {
+        console.error('[DB Error] saveEpgSnapshot:', e.message);
+    }
+}
+
+// ── getEpgHistory ────────────────────────────────────────────────────────
+/**
+ * Fetch a channel's recorded program history for the last N hours.
+ * @param {string} channelKey
+ * @param {number} [hoursBack=48]
+ */
+async function getEpgHistory(channelKey, hoursBack = 48) {
+    if (!supabase) return [];
+    try {
+        const since = Date.now() - (hoursBack * 60 * 60 * 1000);
+        const { data, error } = await supabase
+            .from('epg_history')
+            .select('title, description, start_time, stop_time')
+            .eq('channel_key', channelKey)
+            .gte('stop_time', since)
+            .lte('stop_time', Date.now())
+            .order('start_time', { ascending: false });
+        if (error) throw error;
+        return data || [];
+    } catch (e) {
+        console.error('[DB Error] getEpgHistory:', e.message);
+        return [];
+    }
+}
+
 module.exports = {
     // Primary API
     getOverride,
@@ -166,6 +217,8 @@ module.exports = {
     incrementUsage,
     getAllOverrides,
     hasSupabase,
+    saveEpgSnapshot,
+    getEpgHistory,
     // Legacy aliases
     getMapping,
     saveMapping,

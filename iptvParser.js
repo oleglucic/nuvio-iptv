@@ -5,6 +5,7 @@ const sax = require('sax');
 const { Readable } = require('stream');
 const { startAiQueue, globalAiCache } = require('./aiCurator'); 
 const { getOverride, getAllOverrides } = require('./db');
+const { extractM3uCatchupInfo, extractXtreamCatchupInfo } = require('./catchup');
 
 const userCaches = new Map();
 const MAX_CACHE_AGE = 60 * 60 * 1000; // 1 hour
@@ -145,6 +146,7 @@ async function parseM3uData(configKey, configObj) {
                 const tvgId = t.match(/tvg-id=["']([^"']+)["']/i);
                 const tvgName = t.match(/tvg-name=["']([^"']+)["']/i);
                 const logo = t.match(/tvg-logo=["']([^"']+)["']/i);
+                const catchupInfo = extractM3uCatchupInfo(t);
                 const rawName = t.lastIndexOf(',') !== -1 ? t.substring(t.lastIndexOf(',') + 1).trim() : "Unknown";
                 
                 if (/([#\-\*_=\+~]){3,}/.test(rawName) || rawName.includes('----') || rawName.includes('####')) { cItem = null; continue; }
@@ -199,15 +201,15 @@ async function parseM3uData(configKey, configObj) {
                 let finalLogo = logo ? logo[1] : '';
 
                 logoTrack.set(cId, { url: finalLogo, name: cName });
-                cItem = { cId, cName, rawName, logo: finalLogo, grp: finalGrp, groupTags };
+                cItem = { cId, cName, rawName, logo: finalLogo, grp: finalGrp, groupTags, catchupInfo };
 
             } else if (t.startsWith('http') && cItem) {
-                const { cId, cName, rawName, logo, grp, groupTags } = cItem;
+                const { cId, cName, rawName, logo, grp, groupTags, catchupInfo } = cItem;
                 const catId = `iptv_${grp.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase()}`;
                 groups.add(grp);
                 
                 if (!tMap.has(cId)) {
-                    const mItem = { id: cId, type: 'tv', name: cName.replace(/\b\w/g, c => c.toUpperCase()), genres: [grp], catalogId: catId, logo: logo, rawName: rawName, group: grp, groupTags: groupTags };
+                    const mItem = { id: cId, type: 'tv', name: cName.replace(/\b\w/g, c => c.toUpperCase()), genres: [grp], catalogId: catId, logo: logo, rawName: rawName, group: grp, groupTags: groupTags, hasCatchup: !!(catchupInfo && catchupInfo.hasCatchup), catchupDays: catchupInfo ? catchupInfo.catchupDays : 0 };
                     tMap.set(cId, { meta: mItem, streams: [] }); 
                     tCat.push(mItem);
                 }
@@ -278,6 +280,7 @@ async function parseXtreamData(configKey, configObj) {
 
         for (const stream of streamRes.data) {
             if (stream.stream_type !== 'live' || !stream.stream_id) continue;
+            const catchupInfo = extractXtreamCatchupInfo(stream);
 
             const rawGrp = catMap.get(stream.category_id?.toString()) || 'Uncategorized';
 
@@ -342,7 +345,7 @@ async function parseXtreamData(configKey, configObj) {
             groups.add(finalGrp);
 
             if (!tMap.has(cId)) {
-                const mItem = { id: cId, type: 'tv', name: cName.replace(/\b\w/g, c => c.toUpperCase()), genres: [finalGrp], catalogId: catId, logo: finalLogo, rawName: rawName, group: finalGrp, groupTags: groupTags };
+                const mItem = { id: cId, type: 'tv', name: cName.replace(/\b\w/g, c => c.toUpperCase()), genres: [finalGrp], catalogId: catId, logo: finalLogo, rawName: rawName, group: finalGrp, groupTags: groupTags, hasCatchup: !!(catchupInfo && catchupInfo.hasCatchup), catchupDays: catchupInfo ? catchupInfo.catchupDays : 0 };
                 tMap.set(cId, { meta: mItem, streams: [] });
                 tCat.push(mItem);
             }
