@@ -3,13 +3,13 @@ version: '3.8'
 services:
   app:
     build: .
-    container_name: nuvio-iptv-app
+    container_name: iptvo-app
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "1111:3000"
     environment:
       - PORT=3000
-      - DATABASE_URL=postgres://nuvio:${POSTGRES_PASSWORD}@postgres:5432/nuvio
+      - DATABASE_URL=postgres://iptvo:${POSTGRES_PASSWORD}@postgres:5432/iptvo
       - REDIS_URL=redis://redis:6379
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - SUPABASE_URL=${SUPABASE_URL}
@@ -18,34 +18,34 @@ services:
       - postgres
       - redis
     networks:
-      - nuvio-net
+      - iptvo-net
 
   postgres:
     image: postgres:16-alpine
-    container_name: nuvio-iptv-postgres
+    container_name: iptvo-postgres
     restart: unless-stopped
     environment:
-      - POSTGRES_USER=nuvio
+      - POSTGRES_USER=iptvo
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=nuvio
+      - POSTGRES_DB=iptvo
     volumes:
-      - nuvio_postgres_data:/var/lib/postgresql/data
+      - iptvo_postgres_data:/var/lib/postgresql/data
     networks:
-      - nuvio-net
+      - iptvo-net
 
   redis:
     image: redis:7-alpine
-    container_name: nuvio-iptv-redis
+    container_name: iptvo-redis
     restart: unless-stopped
     volumes:
-      - nuvio_redis_data:/data
+      - iptvo_redis_data:/data
     networks:
-      - nuvio-net
+      - iptvo-net
 
 volumes:
-  nuvio_postgres_data:
-  nuvio_redis_data:
+  iptvo_postgres_data:
+  iptvo_redis_data:
 
 networks:
-  nuvio-net:
+  iptvo-net:
     driver: bridge
