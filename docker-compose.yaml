@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    container_name: nuvio-iptv-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - DATABASE_URL=postgres://nuvio:${POSTGRES_PASSWORD}@postgres:5432/nuvio
+      - REDIS_URL=redis://redis:6379
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_KEY=${SUPABASE_KEY}
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - nuvio-net
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: nuvio-iptv-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=nuvio
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=nuvio
+    volumes:
+      - nuvio_postgres_data:/var/lib/postgresql/data
+    networks:
+      - nuvio-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: nuvio-iptv-redis
+    restart: unless-stopped
+    volumes:
+      - nuvio_redis_data:/data
+    networks:
+      - nuvio-net
+
+volumes:
+  nuvio_postgres_data:
+  nuvio_redis_data:
+
+networks:
+  nuvio-net:
+    driver: bridge
