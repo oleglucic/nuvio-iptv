@@ -6,6 +6,7 @@ const { Readable } = require('stream');
 const { startAiQueue, globalAiCache } = require('./aiCurator'); 
 const { getOverride, getAllOverrides } = require('./db');
 const { extractM3uCatchupInfo, extractXtreamCatchupInfo } = require('./catchup');
+const { saveCacheToRedis } = require('./redisCache');
 
 const userCaches = new Map();
 const MAX_CACHE_AGE = 60 * 60 * 1000; // 1 hour
@@ -224,6 +225,7 @@ async function parseM3uData(configKey, configObj) {
         
         userCaches.set(configKey, { status: 'ready', channelMap: tMap, logoTracker: logoTrack, catalogItems: tCat, uniqueGroups: groups, epgData: tEpg, lastUpdated: Date.now() });
         console.log(`[parser] READY configKey=${configKey ? configKey.substring(0,12) : 'null'}... channels=${tMap.size} groups=${groups.size} elapsed=${Date.now() - __t0}ms`);
+        saveCacheToRedis(configKey, userCaches.get(configKey)).catch(e => console.error('[Redis Error] write-through failed:', e.message));
         
         // Always trigger async background AI process when dirty channels exist
         if (dirtyChannels.length > 0) {
@@ -360,6 +362,7 @@ async function parseXtreamData(configKey, configObj) {
         
         userCaches.set(configKey, { status: 'ready', channelMap: tMap, logoTracker: logoTrack, catalogItems: tCat, uniqueGroups: groups, epgData: tEpg, lastUpdated: Date.now() });
         console.log(`[parser] READY configKey=${configKey ? configKey.substring(0,12) : 'null'}... channels=${tMap.size} groups=${groups.size} elapsed=${Date.now() - __t0}ms`);
+        saveCacheToRedis(configKey, userCaches.get(configKey)).catch(e => console.error('[Redis Error] write-through failed:', e.message));
         console.log(`[Xtream Engine] Categorized and loaded ${tCat.length} streams inside memory.`);
 
         if (dirtyChannels.length > 0) {
@@ -469,4 +472,4 @@ function getEpgText(chKey, epgData, offsetHours = 0) {
     return text;
 }
 
-module.exports = { streamFetchIPTV, getEpgText, userCaches, getUserCache };
+module.exports = { streamFetchIPTV, getEpgText, userCaches, getUserCache, MAX_CACHE_AGE };

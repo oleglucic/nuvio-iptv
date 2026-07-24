@@ -2,7 +2,8 @@ const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
-const { streamFetchIPTV, getEpgText, userCaches } = require('./iptvParser');
+const { streamFetchIPTV, getEpgText, userCaches, MAX_CACHE_AGE } = require('./iptvParser');
+const { loadCacheFromRedis, listCachedConfigKeys } = require('./redisCache');
 const { getCatchupStreams, snapshotAllEpgToHistory } = require('./catchup');
 const { getPremiumPoster } = require('./imageEngine');
 
@@ -74,6 +75,15 @@ async function ensureCache(config, configObj) {
     // Total cache miss (cold start): kick off the fetch and wait briefly for it,
     // so we don't return an empty catalog when the parse would finish in time anyway.
     if (!cached) {
+        const redisCached = await loadCacheFromRedis(config);
+        if (redisCached && redisCached.status === 'ready') {
+            userCaches.set(config, redisCached);
+            console.log(`[ensureCache] rehydrated from Redis, channels=${redisCached.channelMap.size}, age=${Math.round((Date.now() - redisCached.lastUpdated)/60000)}min`);
+            if (Date.now() - redisCached.lastUpdated > 60 * 60 * 1000) {
+                streamFetchIPTV(config, configObj).catch(e => console.error('[ensureCache] background refresh failed:', e.message));
+            }
+            return redisCached;
+        }
         const fetchPromise = streamFetchIPTV(config, configObj).catch(e => console.error('[ensureCache] fetch failed:', e.message));
         const timeoutPromise = new Promise(resolve => setTimeout(resolve, 6000));
         await Promise.race([fetchPromise, timeoutPromise]);
@@ -279,5 +289,32 @@ setInterval(() => {
 setTimeout(() => {
     snapshotAllEpgToHistory(userCaches).catch(e => console.error('[Catchup] Initial snapshot failed:', e.message));
 }, 2 * 60 * 1000);
+
+// Proactively refresh any cached config older than MAX_CACHE_AGE, independent of
+// incoming requests - so the cache stays fresh even during idle periods.
+setInterval(() => {
+    for (const [configKey, cached] of userCaches.entries()) {
+        if (cached && cached.status === 'ready' && (Date.now() - cached.lastUpdated > MAX_CACHE_AGE)) {
+            const configObj = extractConfig({ params: { config: configKey }, query: {} });
+            if (configObj) {
+                console.log(`[ProactiveRefresh] refreshing stale config=${configKey.substring(0,12)}...`);
+                streamFetchIPTV(configKey, configObj).catch(e => console.error('[ProactiveRefresh] failed:', e.message));
+            }
+        }
+    }
+}, 15 * 60 * 1000);
+
+// Pre-warm the in-memory cache from Redis on boot, so the very first request
+// after a container restart is instant instead of needing a full re-parse.
+(async () => {
+    const keys = await listCachedConfigKeys();
+    for (const key of keys) {
+        const cached = await loadCacheFromRedis(key);
+        if (cached && cached.status === 'ready') {
+            userCaches.set(key, cached);
+        }
+    }
+    console.log(`[Boot] Pre-warmed ${keys.length} config(s) from Redis.`);
+})();
 
 app.listen(PORT, () => console.log(`IPTVo Premium Backend operational on port ${PORT}`));
