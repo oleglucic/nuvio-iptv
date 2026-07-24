@@ -1,154 +1,136 @@
-const { createClient } = require('@supabase/supabase-js');
+const { Pool } = require('pg');
 
-// ── Lazy singleton ──────────────────────────────────────────────────────────
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_KEY;
-const hasSupabase = !!(supabaseUrl && supabaseKey);
+const connectionString = process.env.DATABASE_URL;
+const hasSupabase = !!connectionString; // kept name for compatibility with existing call-sites
+let pool = null;
 
-let supabase = null;
-if (hasSupabase) {
-    supabase = createClient(supabaseUrl, supabaseKey);
-    console.log('[DB] Supabase client initialised.');
+if (connectionString) {
+    pool = new Pool({ connectionString });
+    pool.on('error', (e) => console.error('[DB Error] Unexpected Postgres pool error:', e.message));
+    console.log('[DB] Postgres pool initialised.');
 } else {
-    console.warn('[DB] SUPABASE_URL / SUPABASE_KEY not set — AI overrides disabled.');
+    console.warn('[DB] DATABASE_URL not set - AI overrides and EPG history disabled.');
 }
 
-// ── getOverride ─────────────────────────────────────────────────────────────
+// -- getOverride --------------------------------------------------------------
 /**
- * Look up an AI-resolved canonical ID for a raw channel name.
+ * Fetch a single override mapping by raw channel name.
  * @param {string} rawName
  * @returns {Promise<{canonical_id: string, confidence: number}|null>}
  */
 async function getOverride(rawName) {
-    if (!supabase) return null;
+    if (!pool) return null;
     try {
-        const { data, error } = await supabase
-            .from('ai_overrides')
-            .select('canonical_id, confidence')
-            .eq('raw_name', rawName)
-            .single();
-
-        if (error || !data) return null;
-        return { canonical_id: data.canonical_id, confidence: parseFloat(data.confidence) };
+        const { rows } = await pool.query(
+            'SELECT canonical_id, confidence FROM ai_overrides WHERE raw_name = $1',
+            [rawName]
+        );
+        if (!rows[0]) return null;
+        return { canonical_id: rows[0].canonical_id, confidence: parseFloat(rows[0].confidence) };
     } catch (e) {
         console.error('[DB Error] getOverride:', e.message);
         return null;
     }
 }
 
-// ── setOverride ─────────────────────────────────────────────────────────────
+// -- setOverride ----------------------------------------------------------------
 /**
- * Insert or update an AI override mapping.
+ * Insert or update an override mapping.
  * @param {string} rawName
  * @param {string} canonicalId
  * @param {number} [confidence=0.85]
  */
 async function setOverride(rawName, canonicalId, confidence = 0.85) {
-    if (!supabase) return;
+    if (!pool) return;
     try {
-        const { error } = await supabase
-            .from('ai_overrides')
-            .upsert(
-                { raw_name: rawName, canonical_id: canonicalId, confidence, updated_at: new Date().toISOString() },
-                { onConflict: 'raw_name' }
-            );
-        if (error) throw error;
+        await pool.query(
+            `INSERT INTO ai_overrides (raw_name, canonical_id, confidence, updated_at)
+             VALUES ($1, $2, $3, now())
+             ON CONFLICT (raw_name)
+             DO UPDATE SET canonical_id = $2, confidence = $3, updated_at = now()`,
+            [rawName, canonicalId, confidence]
+        );
     } catch (e) {
         console.error('[DB Error] setOverride:', e.message);
     }
 }
 
-// ── incrementConfidence ─────────────────────────────────────────────────────
+// -- incrementConfidence --------------------------------------------------------
 /**
  * Increase a mapping's confidence score (capped at 0.99).
  * @param {string} rawName
  * @param {number} [delta=0.01]
  */
 async function incrementConfidence(rawName, delta = 0.01) {
-    if (!supabase) return;
+    if (!pool) return;
     try {
-        const current = await getOverride(rawName);
-        if (!current) return;
-        const newConf = Math.min(0.99, current.confidence + delta);
-        const { error } = await supabase
-            .from('ai_overrides')
-            .update({ confidence: newConf, updated_at: new Date().toISOString() })
-            .eq('raw_name', rawName);
-        if (error) throw error;
+        await pool.query(
+            `UPDATE ai_overrides
+             SET confidence = LEAST(confidence + $2, 0.99), updated_at = now()
+             WHERE raw_name = $1`,
+            [rawName, delta]
+        );
     } catch (e) {
         console.error('[DB Error] incrementConfidence:', e.message);
     }
 }
 
-// ── decrementConfidence ─────────────────────────────────────────────────────
+// -- decrementConfidence ---------------------------------------------------------
 /**
  * Decrease a mapping's confidence score (floored at 0.0).
  * @param {string} rawName
  * @param {number} [delta=0.1]
  */
 async function decrementConfidence(rawName, delta = 0.1) {
-    if (!supabase) return;
+    if (!pool) return;
     try {
-        const current = await getOverride(rawName);
-        if (!current) return;
-        const newConf = Math.max(0.0, current.confidence - delta);
-        const { error } = await supabase
-            .from('ai_overrides')
-            .update({ confidence: newConf, updated_at: new Date().toISOString() })
-            .eq('raw_name', rawName);
-        if (error) throw error;
+        await pool.query(
+            `UPDATE ai_overrides
+             SET confidence = GREATEST(confidence - $2, 0.0), updated_at = now()
+             WHERE raw_name = $1`,
+            [rawName, delta]
+        );
     } catch (e) {
         console.error('[DB Error] decrementConfidence:', e.message);
     }
 }
 
-// ── incrementUsage ──────────────────────────────────────────────────────────
+// -- incrementUsage ---------------------------------------------------------------
 /**
  * Bump usage_count for a raw_name mapping.
  * @param {string} rawName
  */
 async function incrementUsage(rawName) {
-    if (!supabase) return;
+    if (!pool) return;
     try {
-        // Use RPC or a plain read-modify-write (table has no DB trigger, so we do it here)
-        const { data, error: readErr } = await supabase
-            .from('ai_overrides')
-            .select('usage_count')
-            .eq('raw_name', rawName)
-            .single();
-
-        if (readErr || !data) return;
-        const { error } = await supabase
-            .from('ai_overrides')
-            .update({ usage_count: (data.usage_count || 0) + 1 })
-            .eq('raw_name', rawName);
-        if (error) throw error;
+        await pool.query(
+            'UPDATE ai_overrides SET usage_count = usage_count + 1 WHERE raw_name = $1',
+            [rawName]
+        );
     } catch (e) {
         console.error('[DB Error] incrementUsage:', e.message);
     }
 }
 
-// ── getAllOverrides ──────────────────────────────────────────────────────────
+// -- getAllOverrides ----------------------------------------------------------------
 /**
  * Fetch all override rows (used by the dashboard).
  * @returns {Promise<Array>}
  */
 async function getAllOverrides() {
-    if (!supabase) return [];
+    if (!pool) return [];
     try {
-        const { data, error } = await supabase
-            .from('ai_overrides')
-            .select('*')
-            .order('usage_count', { ascending: false });
-        if (error) throw error;
-        return data || [];
+        const { rows } = await pool.query(
+            'SELECT * FROM ai_overrides ORDER BY usage_count DESC'
+        );
+        return rows || [];
     } catch (e) {
         console.error('[DB Error] getAllOverrides:', e.message);
         return [];
     }
 }
 
-// ── Legacy aliases kept for any remaining call-sites ────────────────────────
+// -- Legacy aliases kept for any remaining call-sites ----------------------------
 const getMapping  = getOverride;
 const saveMapping = setOverride;
 const adjustConfidence = async (rawName, isSuccess) => {
@@ -157,7 +139,7 @@ const adjustConfidence = async (rawName, isSuccess) => {
 };
 const getAllMappings = getAllOverrides;
 
-// ── saveEpgSnapshot ─────────────────────────────────────────────────────
+// -- saveEpgSnapshot ------------------------------------------------------------
 /**
  * Persist a batch of EPG programs for a channel, so we build our own
  * rolling history over time (XMLTV feeds are forward-looking only).
@@ -165,43 +147,43 @@ const getAllMappings = getAllOverrides;
  * @param {Array<{title: string, desc: string, start: number, stop: number}>} programs
  */
 async function saveEpgSnapshot(channelKey, programs) {
-    if (!supabase || !programs || programs.length === 0) return;
+    if (!pool || !programs || programs.length === 0) return;
     try {
-        const rows = programs.map(p => ({
-            channel_key: channelKey,
-            title: p.title || null,
-            description: p.desc || null,
-            start_time: p.start,
-            stop_time: p.stop
-        }));
-        const { error } = await supabase
-            .from('epg_history')
-            .upsert(rows, { onConflict: 'channel_key,start_time' });
-        if (error) throw error;
+        const client = await pool.connect();
+        try {
+            for (const p of programs) {
+                await client.query(
+                    `INSERT INTO epg_history (channel_key, title, description, start_time, stop_time)
+                     VALUES ($1, $2, $3, $4, $5)
+                     ON CONFLICT (channel_key, start_time) DO NOTHING`,
+                    [channelKey, p.title || null, p.desc || null, p.start, p.stop]
+                );
+            }
+        } finally {
+            client.release();
+        }
     } catch (e) {
         console.error('[DB Error] saveEpgSnapshot:', e.message);
     }
 }
 
-// ── getEpgHistory ────────────────────────────────────────────────────────
+// -- getEpgHistory ----------------------------------------------------------------
 /**
  * Fetch a channel's recorded program history for the last N hours.
  * @param {string} channelKey
  * @param {number} [hoursBack=48]
  */
 async function getEpgHistory(channelKey, hoursBack = 48) {
-    if (!supabase) return [];
+    if (!pool) return [];
     try {
         const since = Date.now() - (hoursBack * 60 * 60 * 1000);
-        const { data, error } = await supabase
-            .from('epg_history')
-            .select('title, description, start_time, stop_time')
-            .eq('channel_key', channelKey)
-            .gte('stop_time', since)
-            .lte('stop_time', Date.now())
-            .order('start_time', { ascending: false });
-        if (error) throw error;
-        return data || [];
+        const { rows } = await pool.query(
+            `SELECT title, description, start_time, stop_time FROM epg_history
+             WHERE channel_key = $1 AND stop_time >= $2 AND stop_time <= $3
+             ORDER BY start_time DESC`,
+            [channelKey, since, Date.now()]
+        );
+        return rows || [];
     } catch (e) {
         console.error('[DB Error] getEpgHistory:', e.message);
         return [];
